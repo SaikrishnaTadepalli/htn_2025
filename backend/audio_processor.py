@@ -105,7 +105,6 @@ class AudioProcessor:
             # Register event handlers that close over `sess` and `session_id`
             def _on_transcript(_conn, result, **kwargs):
                 try:
-                    logger.info(f"Deepgram transcript event received for {session_id}: {result}")
                     alt = result.channel.alternatives[0] if result.channel.alternatives else None
                     if not alt or not alt.transcript:
                         logger.debug(f"No transcript in alternatives for {session_id}")
@@ -123,14 +122,14 @@ class AudioProcessor:
                 except Exception as e:
                     logger.exception("Transcript handler error [%s]: %s", session_id, e)
 
-            def _on_utt_end(_conn, message, **kwargs):
-                logger.debug("UtteranceEnd [%s]: %s", session_id, message)
+            def _on_utt_end(_conn, **kwargs):
+                logger.debug("UtteranceEnd [%s]: %s", session_id, kwargs)
 
             def _on_error(_conn, error, **kwargs):
                 logger.error("Deepgram error [%s]: %s", session_id, error)
 
-            def _on_close(_conn, close, **kwargs):
-                logger.info("Deepgram closed [%s]: %s", session_id, close)
+            def _on_close(_conn, **kwargs):
+                logger.info("Deepgram closed [%s]: %s", session_id, kwargs)
                 sess.active = False
 
             # Register the handlers
