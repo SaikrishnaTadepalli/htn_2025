@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+websockets
+speechrecognition
+requests
+pydub
+python-multipart
+openai
+elevenlabs
+asyncio
+numpy
+pyaudio
