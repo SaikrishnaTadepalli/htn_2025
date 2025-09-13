@@ -46,13 +46,15 @@ async def check_sleeper_phrases(text: str) -> tuple[bool, str, str]:
     global streaming_enabled
 
     # Handle both partial and final transcripts
+    import re
     text_clean = text.replace("[partial]", "").strip()
-    text_lower = text_clean.lower().strip()
+    # Remove punctuation and make lowercase
+    text_clean = re.sub(r'[^\w\s]', '', text_clean).lower().strip()
 
-    logger.debug(f"Checking sleeper phrases in: '{text}' -> cleaned: '{text_clean}' -> lower: '{text_lower}'")
+    logger.debug(f"Checking sleeper phrases in: '{text}' -> cleaned: '{text_clean}'")
 
     # Check for activation phrase
-    if "talk to me" in text_lower or "talk to gym" in text_lower or "talk to jim" in text_lower:
+    if "talk to me" in text_clean or "talk to polly" in text_clean:
         streaming_enabled = True
         logger.info("Sleeper agent activated: Audio streaming enabled")
         sassy_responses = [
@@ -66,7 +68,7 @@ async def check_sleeper_phrases(text: str) -> tuple[bool, str, str]:
         return True, random.choice(sassy_responses), "activate"
 
     # Check for deactivation phrase
-    if "shut up jim" in text_lower or "shut up gym" in text_lower or "shut up" in text_lower:
+    if "shut up polly" in text_clean in text_clean or "shut up" in text_clean:
         streaming_enabled = False
         logger.info("Sleeper agent deactivated: Audio streaming disabled")
         sassy_responses = [
@@ -80,7 +82,7 @@ async def check_sleeper_phrases(text: str) -> tuple[bool, str, str]:
         return True, random.choice(sassy_responses), "deactivate"
 
     # Check for music stop phrase
-    if "stop music jim" in text_lower or "stop music gym" in text_lower or "stop the music jim" in text_lower:
+    if "stop music polly" in text_clean:
         logger.info("Music stop command detected")
         
         # Stop any playing music
@@ -246,8 +248,9 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                 continue
 
                             # Check if this is a music request first (before jokes)
+                            # Only process music requests on final transcripts (not partials) to prevent race conditions
                             music_result = None
-                            if music_responder and music_controller:
+                            if music_responder and music_controller and not transcription.startswith("[partial]"):
                                 try:
                                     music_request = await music_responder.process_transcription(transcription)
                                     if music_request:
@@ -321,9 +324,9 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                 except Exception as e:
                                     logger.error(f"Error processing music request for {session_id}: {e}")
 
-                            # Only process jokes if no music was requested
+                            # Only process jokes if no music was requested and on final transcripts
                             joke_result = None
-                            if not music_result:
+                            if not music_result and not transcription.startswith("[partial]"):
                                 joke_result = await joke_responder.process_text_for_joke(transcription)
 
                             if joke_result:
@@ -380,6 +383,7 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                         audio_currently_streaming[session_id] = False
                             else:
                                 # Send transcription back if no joke or music was generated
+                                # Always send transcriptions (including partials) for real-time feedback
                                 if not music_result:
                                     await websocket.send_json({
                                         "type": "transcription",
