@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { getWebSocketUrl } from '../config/websocket'
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -9,10 +10,12 @@ export default function Home() {
   const streamRef = useRef<MediaStream | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const processorRef = useRef<any>(null)
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null)
 
   const [transcription, setTranscription] = useState('')
   const [jokeResponse, setJokeResponse] = useState('')
   const [isConnected, setIsConnected] = useState(false)
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false)
 
   useEffect(() => {
     const startEverything = async () => {
@@ -36,7 +39,7 @@ export default function Home() {
 
         // Connect WebSocket
         const sessionId = `session_${Date.now()}`
-        const ws = new WebSocket('ws://localhost:8000/ws/audio')
+        const ws = new WebSocket(getWebSocketUrl('/ws/audio'))
         wsRef.current = ws
 
         ws.onopen = () => {
@@ -57,7 +60,12 @@ export default function Home() {
               setJokeResponse(data.joke || '')
               setTranscription(data.original_text || '')
             } else if (data.type === 'joke_audio' && data.audio_data) {
-              // Play joke audio
+              if (currentAudioRef.current) {
+                currentAudioRef.current.pause()
+                currentAudioRef.current.currentTime = 0
+              }
+
+              // Play new joke audio
               try {
                 const audioData = atob(data.audio_data)
                 const audioBytes = new Uint8Array(audioData.length)
@@ -67,9 +75,26 @@ export default function Home() {
                 const audioBlob = new Blob([audioBytes], { type: 'audio/mp3' })
                 const audioUrl = URL.createObjectURL(audioBlob)
                 const audio = new Audio(audioUrl)
+
+                currentAudioRef.current = audio
+                setIsPlayingAudio(true)
+
+                audio.onended = () => {
+                  setIsPlayingAudio(false)
+                  currentAudioRef.current = null
+                  URL.revokeObjectURL(audioUrl)
+                }
+
+                audio.onerror = () => {
+                  setIsPlayingAudio(false)
+                  currentAudioRef.current = null
+                  URL.revokeObjectURL(audioUrl)
+                }
+
                 audio.play()
               } catch (e) {
                 console.error('Error playing audio:', e)
+                setIsPlayingAudio(false)
               }
             }
           } catch (e) {
@@ -119,6 +144,10 @@ export default function Home() {
 
     return () => {
       // Cleanup
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause()
+        currentAudioRef.current = null
+      }
       if (processorRef.current) {
         processorRef.current.disconnect()
       }

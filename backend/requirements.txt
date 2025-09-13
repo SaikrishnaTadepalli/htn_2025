@@ -6,7 +6,6 @@ python-multipart
 openai
 elevenlabs
 numpy
-pyaudio
 groq
 python-dotenv
 deepgram-sdk
