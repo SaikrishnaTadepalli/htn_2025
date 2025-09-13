@@ -54,11 +54,6 @@ async def test_tts():
                 if audio_data:
                     print("✅ Text converted to speech successfully!")
                     success_count += 1
-                    
-                    # Save audio file
-                    filename = f"tts_test_{i}.mp3"
-                    if tts.save_audio(audio_data, filename):
-                        print(f"💾 Audio saved to {filename}")
                 else:
                     print("❌ Failed to convert text to speech")
                 
@@ -67,10 +62,8 @@ async def test_tts():
             
             print("-" * 40)
             
-            # Small delay between tests
             await asyncio.sleep(1)
         
-        # Summary
         print(f"\n📊 Test Summary:")
         print(f"   Total texts: {len(test_texts)}")
         print(f"   Successful conversions: {success_count}")

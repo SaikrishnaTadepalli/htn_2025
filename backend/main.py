@@ -98,6 +98,32 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                     "confidence": joke_result["confidence"],
                                     "timestamp": data.get("timestamp")
                                 })
+
+                                # Generate TTS audio if available
+                                if joke_tts:
+                                    try:
+                                        logger.info(f"Converting joke to speech for {session_id}")
+                                        audio_generator = await joke_tts.speak_joke(joke_result, play_audio=False)
+
+                                        if audio_generator:
+                                            # Collect all audio chunks from generator into bytes
+                                            audio_data = b"".join(audio_generator)
+
+                                            # Send audio data back to client (base64 encoded)
+                                            audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+                                            await websocket.send_json({
+                                                "type": "joke_audio",
+                                                "session_id": session_id,
+                                                "audio_data": audio_b64,
+                                                "joke_text": joke_result["joke_response"],
+                                                "original_text": transcription,
+                                                "timestamp": data.get("timestamp")
+                                            })
+                                            logger.info(f"Joke audio sent for {session_id}")
+                                        else:
+                                            logger.warning(f"Failed to generate audio for joke in {session_id}")
+                                    except Exception as e:
+                                        logger.error(f"Error generating joke audio for {session_id}: {e}")
                             else:
                                 # Send transcription back if no joke generated
                                 await websocket.send_json({

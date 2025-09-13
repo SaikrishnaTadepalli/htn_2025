@@ -7,6 +7,9 @@ import websockets
 import json
 import base64
 import pyaudio
+import io
+from pydub import AudioSegment
+from pydub.playback import play
 
 import time
 
@@ -68,6 +71,22 @@ class MicrophoneStreamer:
                         print(f"🎭 JOKE: {data.get('joke')}")
                         print(f"    Original: '{data.get('original_text')}'")
                         print(f"    Type: {data.get('joke_type')}, Confidence: {data.get('confidence'):.2f}")
+                    elif data.get("type") == "joke_audio":
+                        print(f"🔊 Playing joke audio...")
+                        try:
+                            # Decode the base64 audio data
+                            audio_b64 = data.get('audio_data')
+                            if audio_b64:
+                                audio_bytes = base64.b64decode(audio_b64)
+
+                                # Create AudioSegment from bytes and play
+                                audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format="mp3")
+                                play(audio)
+                                print(f"✅ Audio played for: '{data.get('joke_text')}'")
+                            else:
+                                print("❌ No audio data received")
+                        except Exception as e:
+                            print(f"❌ Error playing audio: {e}")
                 except asyncio.TimeoutError:
                     continue
                 except Exception as e:
