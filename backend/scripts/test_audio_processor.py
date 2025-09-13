@@ -37,13 +37,20 @@ class MicrophoneStreamer:
 
     async def connect_websocket(self):
         try:
-            self.websocket = await websockets.connect(self.websocket_url)
+            self.websocket = await websockets.connect(
+                self.websocket_url,
+                ping_interval=20,  # Send ping every 20 seconds
+                ping_timeout=10,   # Wait 10 seconds for pong
+                close_timeout=10   # Wait 10 seconds for close
+            )
             logger.info(f"Connected to WebSocket: {self.websocket_url}")
             
-            await self.websocket.send(json.dumps({
+            session_start_msg = {
                 "type": "session_start",
                 "session_id": self.session_id
-            }))
+            }
+            await self.websocket.send(json.dumps(session_start_msg))
+            logger.info(f"Sent session start: {session_start_msg}")
             
         except Exception as e:
             logger.error(f"Failed to connect to WebSocket: {e}")
@@ -57,6 +64,10 @@ class MicrophoneStreamer:
                     data = json.loads(response)
                     if data.get("type") == "transcription":
                         print(f"Transcribed: '{data.get('text')}'")
+                    elif data.get("type") == "joke_response":
+                        print(f"🎭 JOKE: {data.get('joke')}")
+                        print(f"    Original: '{data.get('original_text')}'")
+                        print(f"    Type: {data.get('joke_type')}, Confidence: {data.get('confidence'):.2f}")
                 except asyncio.TimeoutError:
                     continue
                 except Exception as e:
@@ -90,20 +101,35 @@ class MicrophoneStreamer:
             response_task = asyncio.create_task(self.listen_for_responses())
             
             while self.is_streaming and (duration_seconds == float('inf') or (time.time() - start_time) < duration_seconds):
-                audio_data = self.stream.read(self.chunk_size, exception_on_overflow=False)
-                
-                audio_b64 = base64.b64encode(audio_data).decode('utf-8')
-                
-                message = {
-                    "type": "audio_chunk",
-                    "session_id": self.session_id,
-                    "audio_data": audio_b64,
-                    "timestamp": time.time()
-                }
-                
-                await self.websocket.send(json.dumps(message))
-                
-                await asyncio.sleep(0.1)
+                try:
+                    audio_data = self.stream.read(self.chunk_size, exception_on_overflow=False)
+                    
+                    # Debug: Check audio levels
+                    import struct
+                    audio_samples = struct.unpack(f'{self.chunk_size}h', audio_data)
+                    max_amplitude = max(abs(sample) for sample in audio_samples)
+                    avg_amplitude = sum(abs(sample) for sample in audio_samples) / len(audio_samples)
+                    
+                    audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+                    
+                    message = {
+                        "type": "audio_chunk",
+                        "session_id": self.session_id,
+                        "audio_data": audio_b64,
+                        "timestamp": time.time()
+                    }
+                    
+                    await self.websocket.send(json.dumps(message))
+                    logger.info(f"Sent audio chunk: {len(audio_data)} bytes | Max: {max_amplitude} | Avg: {avg_amplitude:.1f}")
+                    
+                    await asyncio.sleep(0.1)
+                    
+                except websockets.exceptions.ConnectionClosed as e:
+                    logger.error(f"WebSocket connection closed: {e}")
+                    break
+                except Exception as e:
+                    logger.error(f"Error in streaming loop: {e}")
+                    break
             
             response_task.cancel()
 
