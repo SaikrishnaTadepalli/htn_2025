@@ -204,7 +204,7 @@ class AudioProcessor:
         """
         try:
             while True:
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(1.5)
                 sess = self.sessions.get(session_id)
                 if not sess or not sess.active or not sess.dg_connection:
                     return

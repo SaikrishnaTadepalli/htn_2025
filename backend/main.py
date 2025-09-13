@@ -24,6 +24,7 @@ joke_responder = JokeResponder()
 
 # Global state for sleeper agent control
 streaming_enabled = True  # Start with streaming enabled
+audio_currently_streaming = {}  # Track per-session audio streaming state
 
 def check_sleeper_phrases(text: str) -> tuple[bool, str]:
     """
@@ -136,18 +137,7 @@ async def websocket_audio_endpoint(websocket: WebSocket):
 
                             logger.info(f"Sleeper phrase check result for {session_id}: detected={sleeper_phrase_detected}, response='{sassy_response}'")
 
-                            # Only process jokes if streaming is enabled
-                            if not streaming_enabled:
-                                # Just send back the transcription without processing
-                                await websocket.send_json({
-                                    "type": "transcription",
-                                    "session_id": session_id,
-                                    "text": transcription,
-                                    "streaming_disabled": True,
-                                    "timestamp": data.get("timestamp")
-                                })
-                                continue
-
+                            # Handle sleeper phrases first (before checking streaming enabled)
                             if sleeper_phrase_detected:
                                 # Send sleeper phrase acknowledgment with sassy response
                                 await websocket.send_json({
@@ -162,6 +152,8 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                 # Generate TTS for the sassy response if available
                                 if joke_tts and sassy_response:
                                     try:
+                                        # Mark audio as streaming
+                                        audio_currently_streaming[session_id] = True
                                         logger.info(f"Converting sassy response to speech for {session_id}")
                                         # Create a fake joke result structure for TTS
                                         fake_joke_result = {
@@ -187,9 +179,36 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                             logger.info(f"Sassy response audio sent for {session_id}")
                                     except Exception as e:
                                         logger.error(f"Error generating sassy response audio for {session_id}: {e}")
+                                    finally:
+                                        # Clear streaming state
+                                        audio_currently_streaming[session_id] = False
 
                                 continue  # Skip joke processing for sleeper phrases
 
+                            # Only process jokes if streaming is enabled
+                            if not streaming_enabled:
+                                # Just send back the transcription without processing
+                                await websocket.send_json({
+                                    "type": "transcription",
+                                    "session_id": session_id,
+                                    "text": transcription,
+                                    "streaming_disabled": True,
+                                    "timestamp": data.get("timestamp")
+                                })
+                                continue
+
+                            # Check if audio is currently being streamed for this session
+                            if audio_currently_streaming.get(session_id, False):
+                                logger.info(f"Audio already streaming for {session_id}, skipping new audio generation")
+                                # Just send back the transcription
+                                await websocket.send_json({
+                                    "type": "transcription",
+                                    "session_id": session_id,
+                                    "text": transcription,
+                                    "audio_busy": True,
+                                    "timestamp": data.get("timestamp")
+                                })
+                                continue
 
                             # Process transcription through joke responder
                             joke_result = await joke_responder.process_text_for_joke(transcription)
@@ -211,6 +230,8 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                 # Generate TTS audio if available
                                 if joke_tts:
                                     try:
+                                        # Mark audio as streaming
+                                        audio_currently_streaming[session_id] = True
                                         logger.info(f"Converting joke to speech for {session_id}")
                                         audio_generator = await joke_tts.speak_joke(joke_result, play_audio=False)
 
@@ -241,6 +262,9 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                             "joke_text": joke_result["joke_response"],
                                             "timestamp": data.get("timestamp")
                                         })
+                                    finally:
+                                        # Clear streaming state
+                                        audio_currently_streaming[session_id] = False
                             else:
                                 # Send transcription back if no joke generated
                                 await websocket.send_json({
@@ -254,8 +278,9 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                     session_id = data.get("session_id", "unknown")
                     logger.info(f"Audio session ended: {session_id}")
 
-                    # Reset audio buffer
+                    # Reset audio buffer and streaming state
                     audio_processor.reset_buffer()
+                    audio_currently_streaming.pop(session_id, None)
 
                     await websocket.send_json({
                         "type": "session_ended",
