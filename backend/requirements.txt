@@ -10,3 +10,5 @@ elevenlabs
 asyncio
 numpy
 pyaudio
+groq
+python-dotenv

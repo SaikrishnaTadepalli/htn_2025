@@ -5,6 +5,11 @@ import json
 import base64
 from audio_processor import AudioProcessor
 from websocket_manager import manager
+from joke_responder import JokeResponder
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -15,6 +20,9 @@ app = FastAPI()
 
 # Initialize audio processor
 audio_processor = AudioProcessor()
+
+# Initialize joke responder
+joke_responder = JokeResponder()
 
 # Define a simple route
 @app.get("/")
@@ -74,6 +82,31 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                 "timestamp": data.get("timestamp")
                             })
 
+                            # Check if we should respond with a joke
+                            try:
+                                joke_response_data = await joke_responder.handle_websocket_message({
+                                    "type": "transcription",
+                                    "text": transcription,
+                                    "session_id": session_id
+                                })
+                                
+                                if joke_response_data:
+                                    logger.info(f"Generated joke response for {session_id}: {joke_response_data['joke_response']}")
+                                    
+                                    # Send joke response back to client
+                                    await websocket.send_json({
+                                        "type": "joke_response",
+                                        "session_id": session_id,
+                                        "original_text": joke_response_data["original_text"],
+                                        "joke_response": joke_response_data["joke_response"],
+                                        "joke_type": joke_response_data["joke_type"],
+                                        "confidence": joke_response_data["confidence"],
+                                        "timestamp": data.get("timestamp")
+                                    })
+                                    
+                            except Exception as e:
+                                logger.error(f"Error processing joke response for {session_id}: {e}")
+
                 elif msg_type == "session_end":
                     session_id = data.get("session_id", "unknown")
                     logger.info(f"Audio session ended: {session_id}")
@@ -97,3 +130,92 @@ async def websocket_audio_endpoint(websocket: WebSocket):
             manager.disconnect(websocket, session_id)
     except Exception as e:
         logger.error(f"Audio WebSocket error: {e}")
+
+@app.websocket("/ws/text")
+async def websocket_text_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for text messages that can trigger joke responses.
+    """
+    session_id = None
+
+    try:
+        # Accept connection
+        await websocket.accept()
+        logger.info("Text WebSocket connection established")
+
+        async for message in websocket:
+            try:
+                data = json.loads(message)
+                msg_type = data.get("type")
+
+                if msg_type == "session_start":
+                    session_id = data.get("session_id", f"text_session_{id(websocket)}")
+                    await manager.connect(websocket, session_id)
+
+                    logger.info(f"Text session started: {session_id}")
+                    await websocket.send_json({
+                        "type": "session_started",
+                        "session_id": session_id,
+                        "status": "ready"
+                    })
+
+                elif msg_type == "text_message":
+                    session_id = data.get("session_id", "unknown")
+                    text_content = data.get("text", "")
+
+                    if text_content:
+                        logger.info(f"Text message for {session_id}: {text_content}")
+
+                        # Send the text message back
+                        await websocket.send_json({
+                            "type": "text_received",
+                            "session_id": session_id,
+                            "text": text_content,
+                            "timestamp": data.get("timestamp")
+                        })
+
+                        # Check if we should respond with a joke
+                        try:
+                            joke_response_data = await joke_responder.handle_websocket_message({
+                                "type": "text_message",
+                                "text": text_content,
+                                "session_id": session_id
+                            })
+                            
+                            if joke_response_data:
+                                logger.info(f"Generated joke response for {session_id}: {joke_response_data['joke_response']}")
+                                
+                                # Send joke response back to client
+                                await websocket.send_json({
+                                    "type": "joke_response",
+                                    "session_id": session_id,
+                                    "original_text": joke_response_data["original_text"],
+                                    "joke_response": joke_response_data["joke_response"],
+                                    "joke_type": joke_response_data["joke_type"],
+                                    "confidence": joke_response_data["confidence"],
+                                    "timestamp": data.get("timestamp")
+                                })
+                                
+                        except Exception as e:
+                            logger.error(f"Error processing joke response for {session_id}: {e}")
+
+                elif msg_type == "session_end":
+                    session_id = data.get("session_id", "unknown")
+                    logger.info(f"Text session ended: {session_id}")
+
+                    await websocket.send_json({
+                        "type": "session_ended",
+                        "session_id": session_id
+                    })
+
+            except json.JSONDecodeError:
+                logger.error("Invalid JSON received in text WebSocket")
+            except Exception as e:
+                logger.error(f"Error processing text message: {e}")
+
+    except WebSocketDisconnect:
+        logger.info(f"Text WebSocket disconnected for session: {session_id}")
+        if session_id:
+            manager.disconnect(websocket, session_id)
+    except Exception as e:
+        logger.error(f"Text WebSocket error: {e}")
