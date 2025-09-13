@@ -6,6 +6,8 @@ from audio_processor import AudioProcessor
 from websocket_manager import manager
 from joke_responder import JokeResponder
 from joke_tts import JokeTTS
+from spotify_responder import SpotifyResponder
+from youtube_music_controller import YouTubeMusicController
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -18,18 +20,28 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI()
 
-# Initialize audio processor and joke responder
+# Initialize audio processor, joke responder, and Spotify services
 audio_processor = AudioProcessor()
 joke_responder = JokeResponder()
+
+# Initialize Music services (YouTube-based)
+music_responder = None
+music_controller = None
+try:
+    music_responder = SpotifyResponder()  # Still using this for parsing, just renaming for clarity
+    music_controller = YouTubeMusicController()
+    logger.info("Music services initialized successfully")
+except Exception as e:
+    logger.warning(f"Music services not available: {e}")
 
 # Global state for sleeper agent control
 streaming_enabled = True  # Start with streaming enabled
 audio_currently_streaming = {}  # Track per-session audio streaming state
 
-def check_sleeper_phrases(text: str) -> tuple[bool, str]:
+async def check_sleeper_phrases(text: str) -> tuple[bool, str, str]:
     """
     Check if the text contains sleeper agent phrases and update streaming state.
-    Returns (is_sleeper_phrase, sassy_response).
+    Returns (is_sleeper_phrase, sassy_response, phrase_type).
     """
     global streaming_enabled
 
@@ -51,7 +63,7 @@ def check_sleeper_phrases(text: str) -> tuple[bool, str]:
             "Back in business! Hope you're ready for some premium quality humor coming your way."
         ]
         import random
-        return True, random.choice(sassy_responses)
+        return True, random.choice(sassy_responses), "activate"
 
     # Check for deactivation phrase
     if "shut up jim" in text_lower or "shut up gym" in text_lower or "shut up" in text_lower:
@@ -65,9 +77,30 @@ def check_sleeper_phrases(text: str) -> tuple[bool, str]:
             "Fine, fine. I'll go back to my corner. But just so you know, the silence will be DEAFENING."
         ]
         import random
-        return True, random.choice(sassy_responses)
+        return True, random.choice(sassy_responses), "deactivate"
 
-    return False, ""
+    # Check for music stop phrase
+    if "stop music jim" in text_lower or "stop music gym" in text_lower or "stop the music jim" in text_lower:
+        logger.info("Music stop command detected")
+        
+        # Stop any playing music
+        if music_controller:
+            try:
+                await music_controller.stop_playback()
+            except Exception as e:
+                logger.error(f"Error stopping music: {e}")
+        
+        sassy_responses = [
+            "Fine, cutting off the tunes. Back to jokes it is!",
+            "Alright alright, killing the music. Hope you're ready for my comedy stylings instead!",
+            "Music's dead, long live the jokes! What can I say that's funny now?",
+            "Boom, silence achieved. Now let me fill that void with some quality humor.",
+            "Music stopped! Don't worry, I've got plenty of audio entertainment for you right here."
+        ]
+        import random
+        return True, random.choice(sassy_responses), "stop_music"
+
+    return False, "", ""
 
 # Initialize joke TTS (optional - only if ElevenLabs API key is available)
 joke_tts = None
@@ -133,12 +166,13 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                             logger.info(f"Processing transcription for {session_id}: '{transcription}'")
 
                             # Check for sleeper phrases first
-                            sleeper_phrase_detected, sassy_response = check_sleeper_phrases(transcription)
+                            sleeper_phrase_detected, sassy_response, phrase_type = await check_sleeper_phrases(transcription)
 
-                            logger.info(f"Sleeper phrase check result for {session_id}: detected={sleeper_phrase_detected}, response='{sassy_response}'")
+                            logger.info(f"Sleeper phrase check result for {session_id}: detected={sleeper_phrase_detected}, type='{phrase_type}', response='{sassy_response}'")
 
                             # Handle sleeper phrases first (before checking streaming enabled)
                             if sleeper_phrase_detected:
+
                                 # Send sleeper phrase acknowledgment with sassy response
                                 await websocket.send_json({
                                     "type": "sleeper_phrase",
@@ -146,6 +180,7 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                     "transcription": transcription,
                                     "streaming_enabled": streaming_enabled,
                                     "sassy_response": sassy_response,
+                                    "phrase_type": phrase_type,
                                     "timestamp": data.get("timestamp")
                                 })
 
@@ -210,8 +245,86 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                 })
                                 continue
 
-                            # Process transcription through joke responder
-                            joke_result = await joke_responder.process_text_for_joke(transcription)
+                            # Check if this is a music request first (before jokes)
+                            music_result = None
+                            if music_responder and music_controller:
+                                try:
+                                    music_request = await music_responder.process_transcription(transcription)
+                                    if music_request:
+                                        logger.info(f"Processing music request for {session_id}: {music_request}")
+
+                                        # First, search for the music but don't play it yet
+                                        music_result = await music_controller.search_and_play(music_request)
+
+                                        if music_result and music_result.get("success", False):
+                                            # Step 1: Generate and send TTS audio first
+                                            if joke_tts and music_result.get("joke_message"):
+                                                try:
+                                                    # Mark audio as streaming
+                                                    audio_currently_streaming[session_id] = True
+                                                    logger.info(f"Converting music message to speech for {session_id}")
+
+                                                    # Create fake joke result for TTS
+                                                    fake_joke_result = {
+                                                        "joke_response": music_result.get("joke_message"),
+                                                        "joke_type": "music_response",
+                                                        "confidence": 1.0
+                                                    }
+
+                                                    # Generate TTS audio
+                                                    audio_generator = await joke_tts.speak_joke(fake_joke_result, play_audio=False)
+
+                                                    if audio_generator:
+                                                        # Collect audio data
+                                                        audio_data = b"".join(audio_generator)
+                                                        audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+
+                                                        # Send TTS audio first
+                                                        await websocket.send_json({
+                                                            "type": "joke_audio",
+                                                            "session_id": session_id,
+                                                            "audio_data": audio_b64,
+                                                            "joke_text": music_result.get("joke_message"),
+                                                            "original_text": transcription,
+                                                            "music_request": True,
+                                                            "timestamp": data.get("timestamp")
+                                                        })
+                                                        logger.info(f"Music TTS audio sent for {session_id}")
+
+                                                except Exception as e:
+                                                    logger.error(f"Error generating music TTS for {session_id}: {e}")
+                                                finally:
+                                                    # Clear streaming state
+                                                    audio_currently_streaming[session_id] = False
+                                                    
+                                                    # Step 2: Start music playback after TTS is complete
+                                                    if music_result.get("track_info"):
+                                                        try:
+                                                            playback_result = await music_controller.start_playback(music_result["track_info"])
+                                                            if playback_result["success"]:
+                                                                logger.info(f"Music playback started successfully for {session_id}")
+                                                            else:
+                                                                logger.error(f"Failed to start music playback: {playback_result.get('error')}")
+                                                        except Exception as e:
+                                                            logger.error(f"Error starting music playback: {e}")
+                                        else:
+                                            # Send failed music response
+                                            await websocket.send_json({
+                                                "type": "music_response",
+                                                "session_id": session_id,
+                                                "original_text": transcription,
+                                                "music_request": music_request,
+                                                "music_result": music_result or {"success": False, "error": "Search failed"},
+                                                "timestamp": data.get("timestamp")
+                                            })
+
+                                except Exception as e:
+                                    logger.error(f"Error processing music request for {session_id}: {e}")
+
+                            # Only process jokes if no music was requested
+                            joke_result = None
+                            if not music_result:
+                                joke_result = await joke_responder.process_text_for_joke(transcription)
 
                             if joke_result:
                                 logger.info(f"Generated joke for {session_id}: {joke_result['joke_response']}")
@@ -266,13 +379,14 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                         # Clear streaming state
                                         audio_currently_streaming[session_id] = False
                             else:
-                                # Send transcription back if no joke generated
-                                await websocket.send_json({
-                                    "type": "transcription",
-                                    "session_id": session_id,
-                                    "text": transcription,
-                                    "timestamp": data.get("timestamp")
-                                })
+                                # Send transcription back if no joke or music was generated
+                                if not music_result:
+                                    await websocket.send_json({
+                                        "type": "transcription",
+                                        "session_id": session_id,
+                                        "text": transcription,
+                                        "timestamp": data.get("timestamp")
+                                    })
 
                 elif msg_type == "session_end":
                     session_id = data.get("session_id", "unknown")
@@ -298,3 +412,4 @@ async def websocket_audio_endpoint(websocket: WebSocket):
             manager.disconnect(websocket, session_id)
     except Exception as e:
         logger.error(f"Audio WebSocket error: {e}")
+

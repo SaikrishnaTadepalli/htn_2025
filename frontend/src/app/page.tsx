@@ -59,9 +59,12 @@ export default function Home() {
             } else if (data.type === 'joke_response') {
               setJokeResponse(data.joke || '')
               setTranscription(data.original_text || '')
+            } else if (data.type === 'music_response') {
+              setJokeResponse(data.joke_message || '')
+              setTranscription(data.original_text || '')
             } else if (data.type === 'joke_tts_failed') {
               setJokeResponse(data.joke_text || '')
-            } else if (data.type === 'joke_audio' && data.audio_data) {
+            } else if ((data.type === 'joke_audio' || data.type === 'music_audio') && data.audio_data) {
               if (currentAudioRef.current) {
                 currentAudioRef.current.pause()
                 currentAudioRef.current.currentTime = 0

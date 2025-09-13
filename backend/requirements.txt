@@ -9,3 +9,5 @@ numpy
 groq
 python-dotenv
 deepgram-sdk
+spotipy
+yt-dlp

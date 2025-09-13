@@ -68,7 +68,7 @@ class WebSocketAudioTester:
 
                     await websocket.send(json.dumps(message))
 
-                    # Listen for responses
+                # Listen for responses
                     try:
                         response = await asyncio.wait_for(websocket.recv(), timeout=0.01)
                         data = json.loads(response)
