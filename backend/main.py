@@ -6,6 +6,7 @@ import base64
 from audio_processor import AudioProcessor
 from websocket_manager import manager
 from joke_responder import JokeResponder
+from joke_tts import JokeTTS
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -23,6 +24,14 @@ audio_processor = AudioProcessor()
 
 # Initialize joke responder
 joke_responder = JokeResponder()
+
+# Initialize joke TTS (optional - only if ElevenLabs API key is available)
+joke_tts = None
+try:
+    joke_tts = JokeTTS()
+    logger.info("JokeTTS initialized successfully")
+except Exception as e:
+    logger.warning(f"JokeTTS not available: {e}")
 
 # Define a simple route
 @app.get("/")
@@ -103,6 +112,28 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                         "confidence": joke_response_data["confidence"],
                                         "timestamp": data.get("timestamp")
                                     })
+                                    
+                                    # Convert joke to speech if TTS is available
+                                    if joke_tts:
+                                        try:
+                                            logger.info(f"Converting joke to speech for {session_id}")
+                                            audio_data = await joke_tts.speak_joke(joke_response_data, play_audio=False)
+                                            
+                                            if audio_data:
+                                                # Send audio data back to client (base64 encoded)
+                                                audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+                                                await websocket.send_json({
+                                                    "type": "joke_audio",
+                                                    "session_id": session_id,
+                                                    "audio_data": audio_b64,
+                                                    "joke_text": joke_response_data["joke_response"],
+                                                    "timestamp": data.get("timestamp")
+                                                })
+                                                logger.info(f"Joke audio sent for {session_id}")
+                                            else:
+                                                logger.warning(f"Failed to generate audio for joke in {session_id}")
+                                        except Exception as e:
+                                            logger.error(f"Error generating joke audio for {session_id}: {e}")
                                     
                             except Exception as e:
                                 logger.error(f"Error processing joke response for {session_id}: {e}")
@@ -195,6 +226,28 @@ async def websocket_text_endpoint(websocket: WebSocket):
                                     "confidence": joke_response_data["confidence"],
                                     "timestamp": data.get("timestamp")
                                 })
+                                
+                                # Convert joke to speech if TTS is available
+                                if joke_tts:
+                                    try:
+                                        logger.info(f"Converting joke to speech for {session_id}")
+                                        audio_data = await joke_tts.speak_joke(joke_response_data, play_audio=False)
+                                        
+                                        if audio_data:
+                                            # Send audio data back to client (base64 encoded)
+                                            audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+                                            await websocket.send_json({
+                                                "type": "joke_audio",
+                                                "session_id": session_id,
+                                                "audio_data": audio_b64,
+                                                "joke_text": joke_response_data["joke_response"],
+                                                "timestamp": data.get("timestamp")
+                                            })
+                                            logger.info(f"Joke audio sent for {session_id}")
+                                        else:
+                                            logger.warning(f"Failed to generate audio for joke in {session_id}")
+                                    except Exception as e:
+                                        logger.error(f"Error generating joke audio for {session_id}: {e}")
                                 
                         except Exception as e:
                             logger.error(f"Error processing joke response for {session_id}: {e}")
