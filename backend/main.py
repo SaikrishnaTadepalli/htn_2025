@@ -1,5 +1,4 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-import asyncio
 import logging
 import json
 import base64
@@ -19,10 +18,8 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI()
 
-# Initialize audio processor
+# Initialize audio processor and joke responder
 audio_processor = AudioProcessor()
-
-# Initialize joke responder
 joke_responder = JokeResponder()
 
 # Initialize joke TTS (optional - only if ElevenLabs API key is available)
@@ -51,7 +48,7 @@ async def websocket_audio_endpoint(websocket: WebSocket):
         await websocket.accept()
         logger.info("Audio WebSocket connection established")
 
-        async for message in websocket:
+        async for message in websocket.iter_text():
             try:
                 data = json.loads(message)
                 msg_type = data.get("type")
@@ -70,10 +67,12 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                 elif msg_type == "audio_chunk":
                     session_id = data.get("session_id", "unknown")
                     audio_b64 = data.get("audio_data")
+                    logger.info(f"Received audio chunk for {session_id}: {len(audio_b64)} bytes")
 
                     if audio_b64:
                         # Decode audio data
                         audio_data = base64.b64decode(audio_b64)
+                        logger.debug(f"Processing audio chunk for {session_id}: {len(audio_data)} bytes")
 
                         # Process with AudioProcessor
                         transcription = await audio_processor.process_audio_chunk(
@@ -83,60 +82,30 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                         if transcription:
                             logger.info(f"Transcription for {session_id}: {transcription}")
 
-                            # Send transcription back
-                            await websocket.send_json({
-                                "type": "transcription",
-                                "session_id": session_id,
-                                "text": transcription,
-                                "timestamp": data.get("timestamp")
-                            })
+                            # Process transcription through joke responder
+                            joke_result = await joke_responder.process_text_for_joke(transcription)
 
-                            # Check if we should respond with a joke
-                            try:
-                                joke_response_data = await joke_responder.handle_websocket_message({
-                                    "type": "transcription",
-                                    "text": transcription,
-                                    "session_id": session_id
+                            if joke_result:
+                                logger.info(f"Generated joke for {session_id}: {joke_result['joke_response']}")
+
+                                # Send joke response back
+                                await websocket.send_json({
+                                    "type": "joke_response",
+                                    "session_id": session_id,
+                                    "original_text": transcription,
+                                    "joke": joke_result["joke_response"],
+                                    "joke_type": joke_result["joke_type"],
+                                    "confidence": joke_result["confidence"],
+                                    "timestamp": data.get("timestamp")
                                 })
-                                
-                                if joke_response_data:
-                                    logger.info(f"Generated joke response for {session_id}: {joke_response_data['joke_response']}")
-                                    
-                                    # Send joke response back to client
-                                    await websocket.send_json({
-                                        "type": "joke_response",
-                                        "session_id": session_id,
-                                        "original_text": joke_response_data["original_text"],
-                                        "joke_response": joke_response_data["joke_response"],
-                                        "joke_type": joke_response_data["joke_type"],
-                                        "confidence": joke_response_data["confidence"],
-                                        "timestamp": data.get("timestamp")
-                                    })
-                                    
-                                    # Convert joke to speech if TTS is available
-                                    if joke_tts:
-                                        try:
-                                            logger.info(f"Converting joke to speech for {session_id}")
-                                            audio_data = await joke_tts.speak_joke(joke_response_data, play_audio=False)
-                                            
-                                            if audio_data:
-                                                # Send audio data back to client (base64 encoded)
-                                                audio_b64 = base64.b64encode(audio_data).decode('utf-8')
-                                                await websocket.send_json({
-                                                    "type": "joke_audio",
-                                                    "session_id": session_id,
-                                                    "audio_data": audio_b64,
-                                                    "joke_text": joke_response_data["joke_response"],
-                                                    "timestamp": data.get("timestamp")
-                                                })
-                                                logger.info(f"Joke audio sent for {session_id}")
-                                            else:
-                                                logger.warning(f"Failed to generate audio for joke in {session_id}")
-                                        except Exception as e:
-                                            logger.error(f"Error generating joke audio for {session_id}: {e}")
-                                    
-                            except Exception as e:
-                                logger.error(f"Error processing joke response for {session_id}: {e}")
+                            else:
+                                # Send transcription back if no joke generated
+                                await websocket.send_json({
+                                    "type": "transcription",
+                                    "session_id": session_id,
+                                    "text": transcription,
+                                    "timestamp": data.get("timestamp")
+                                })
 
                 elif msg_type == "session_end":
                     session_id = data.get("session_id", "unknown")

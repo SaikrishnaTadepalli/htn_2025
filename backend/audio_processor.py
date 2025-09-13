@@ -33,7 +33,6 @@ class AudioProcessor:
         self.sample_rate: int = 16000
         self.channels: int = 1
         self.encoding: str = "linear16"   # 16-bit PCM little-endian
-        self.chunk_duration_ms: int = 1000  # actual chunk target (your logs show ~2s; set as you like)
         self.keepalive_after_s: float = 8.0  # send silence if no audio for this many seconds
 
         if not DEEPGRAM_API_KEY:
@@ -64,10 +63,11 @@ class AudioProcessor:
                 session.keepalive_task = asyncio.create_task(self._keepalive_loop(session_id))
 
             # Read any newly arrived transcript
-            logger.debug(f"Latest transcript for {session_id}: {session}")
+            logger.debug(f"Latest transcript for {session_id}: {session.latest_transcript}")
             if session.latest_transcript:
                 text = session.latest_transcript
                 session.latest_transcript = None
+                logger.debug(f"Returning transcript for {session_id}: {text}")
                 return text
 
         except Exception as e:
@@ -77,8 +77,14 @@ class AudioProcessor:
         return None
 
     async def end_session(self, session_id: str) -> None:
-        """Call this when you’re done streaming for a given session."""
+        """Call this when you're done streaming for a given session."""
         await self._cleanup_session(session_id)
+
+    def reset_buffer(self):
+        """Reset any internal buffers. Called when session ends."""
+        # For this implementation, we don't have persistent buffers to reset
+        # But we keep this method for compatibility with the main.py call
+        pass
 
     async def _get_or_create_session(self, session_id: str) -> Optional[DGSession]:
         # Return existing if active
