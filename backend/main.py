@@ -67,7 +67,6 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                 elif msg_type == "audio_chunk":
                     session_id = data.get("session_id", "unknown")
                     audio_b64 = data.get("audio_data")
-                    logger.info(f"Received audio chunk for {session_id}: {len(audio_b64)} bytes")
 
                     if audio_b64:
                         # Decode audio data
@@ -80,8 +79,6 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                         )
 
                         if transcription:
-                            logger.info(f"Transcription for {session_id}: {transcription}")
-
                             # Process transcription through joke responder
                             joke_result = await joke_responder.process_text_for_joke(transcription)
 
@@ -124,6 +121,14 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                             logger.warning(f"Failed to generate audio for joke in {session_id}")
                                     except Exception as e:
                                         logger.error(f"Error generating joke audio for {session_id}: {e}")
+                                        # Send joke without audio when TTS fails
+                                        await websocket.send_json({
+                                            "type": "joke_tts_failed",
+                                            "session_id": session_id,
+                                            "message": "Audio generation failed, but joke is still available",
+                                            "joke_text": joke_result["joke_response"],
+                                            "timestamp": data.get("timestamp")
+                                        })
                             else:
                                 # Send transcription back if no joke generated
                                 await websocket.send_json({

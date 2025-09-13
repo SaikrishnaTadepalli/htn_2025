@@ -15,7 +15,7 @@ export default function Home() {
   const [transcription, setTranscription] = useState('')
   const [jokeResponse, setJokeResponse] = useState('')
   const [isConnected, setIsConnected] = useState(false)
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false)
+  const [, setIsPlayingAudio] = useState(false)
 
   useEffect(() => {
     const startEverything = async () => {
@@ -59,6 +59,8 @@ export default function Home() {
             } else if (data.type === 'joke_response') {
               setJokeResponse(data.joke || '')
               setTranscription(data.original_text || '')
+            } else if (data.type === 'joke_tts_failed') {
+              setJokeResponse(data.joke_text || '')
             } else if (data.type === 'joke_audio' && data.audio_data) {
               if (currentAudioRef.current) {
                 currentAudioRef.current.pause()
@@ -68,13 +70,20 @@ export default function Home() {
               // Play new joke audio
               try {
                 const audioData = atob(data.audio_data)
+
                 const audioBytes = new Uint8Array(audioData.length)
                 for (let i = 0; i < audioData.length; i++) {
                   audioBytes[i] = audioData.charCodeAt(i)
                 }
-                const audioBlob = new Blob([audioBytes], { type: 'audio/mp3' })
+
+                const audioBlob = new Blob([audioBytes], { type: 'audio/mpeg' })
                 const audioUrl = URL.createObjectURL(audioBlob)
+
                 const audio = new Audio(audioUrl)
+
+                // Set additional properties for better compatibility
+                audio.preload = 'auto'
+                audio.crossOrigin = 'anonymous'
 
                 currentAudioRef.current = audio
                 setIsPlayingAudio(true)
@@ -85,13 +94,32 @@ export default function Home() {
                   URL.revokeObjectURL(audioUrl)
                 }
 
-                audio.onerror = () => {
+                audio.onerror = (error) => {
+                  console.error('Audio element error:', error)
                   setIsPlayingAudio(false)
                   currentAudioRef.current = null
                   URL.revokeObjectURL(audioUrl)
                 }
 
-                audio.play()
+                audio.onended = () => {
+                  setIsPlayingAudio(false)
+                  currentAudioRef.current = null
+                  URL.revokeObjectURL(audioUrl)
+                }
+
+                const playPromise = audio.play()
+                if (playPromise !== undefined) {
+                  playPromise.catch(error => {
+                    console.error('Audio play failed:', error)
+                    setIsPlayingAudio(false)
+
+                    // Try alternative approach: force load first
+                    audio.load()
+                    setTimeout(() => {
+                      audio.play().catch(() => setIsPlayingAudio(false))
+                    }, 100)
+                  })
+                }
               } catch (e) {
                 console.error('Error playing audio:', e)
                 setIsPlayingAudio(false)
