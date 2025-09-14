@@ -46,6 +46,7 @@ except Exception as e:
 # Global state for sleeper agent control
 streaming_enabled = True  # Start with streaming enabled
 audio_currently_streaming = {}  # Track per-session audio streaming state
+conversation_mode = True  # Track whether Polly is in conversation mode (always replies) or comment mode (evaluates whether to reply)
 
 # Expression data cache for each session
 expression_cache = {}  # Store recent expression data per session
@@ -109,7 +110,7 @@ async def check_sleeper_phrases(text: str) -> tuple[bool, str, str]:
     Check if the text contains sleeper agent phrases and update streaming state.
     Returns (is_sleeper_phrase, sassy_response, phrase_type).
     """
-    global streaming_enabled
+    global streaming_enabled, conversation_mode
 
     # Handle both partial and final transcripts
     import re
@@ -133,8 +134,36 @@ async def check_sleeper_phrases(text: str) -> tuple[bool, str, str]:
         import random
         return True, random.choice(sassy_responses), "activate"
 
+    # Check for conversation mode toggle
+    if "conversation mode polly" in text_clean or "conversation mode" in text_clean:
+        conversation_mode = True
+        logger.info("Polly switched to conversation mode: Will always reply")
+        sassy_responses = [
+            "Conversation mode activated! Now I'll chat about literally everything. Hope you're ready for my hot takes!",
+            "Alright, switching to conversation mode! I'm about to become your most talkative companion.",
+            "Conversation mode ON! Time for me to comment on absolutely everything you say. You asked for it!",
+            "Now we're talking! Conversation mode means I'll never shut up. You've been warned!",
+            "Conversation mode engaged! Hope you like hearing my voice because it's about to be constant commentary."
+        ]
+        import random
+        return True, random.choice(sassy_responses), "conversation_mode"
+
+    # Check for comment mode toggle
+    if "comment mode polly" in text_clean or "comment mode" in text_clean:
+        conversation_mode = False
+        logger.info("Polly switched to comment mode: Will evaluate whether to reply")
+        sassy_responses = [
+            "Comment mode activated! Now I'll only speak when I have something REALLY good to say. Quality over quantity!",
+            "Switching to selective mode! I'll only grace you with my wit when it's truly worth it.",
+            "Comment mode ON! I'm going back to being picky about when to share my comedic genius.",
+            "Fine, I'll be more selective with my pearls of wisdom. Only the premium content from now on!",
+            "Comment mode engaged! I'll save my energy for the moments that truly deserve my attention."
+        ]
+        import random
+        return True, random.choice(sassy_responses), "comment_mode"
+
     # Check for deactivation phrase
-    if "shut up polly" in text_clean in text_clean or "shut up" in text_clean:
+    if "shut up polly" in text_clean or "shut up" in text_clean:
         streaming_enabled = False
         logger.info("Sleeper agent deactivated: Audio streaming disabled")
         sassy_responses = [
@@ -209,6 +238,13 @@ def read_item(item_id: int, q: str | None = None):
 @app.get("/streaming-status")
 def get_streaming_status():
     return {"streaming_enabled": streaming_enabled}
+
+@app.get("/polly-status")
+def get_polly_status():
+    return {
+        "streaming_enabled": streaming_enabled,
+        "conversation_mode": conversation_mode
+    }
 
 @app.websocket("/ws/audio")
 async def websocket_audio_endpoint(websocket: WebSocket):
@@ -549,7 +585,7 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                             if not music_result and not transcription.startswith("[partial]"):
                                 # Get recent expression data for context
                                 current_expression = expression_cache.get(session_id)
-                                joke_result = await joke_responder.process_text_for_joke(transcription, current_expression)
+                                joke_result = await joke_responder.process_text_for_joke(transcription, current_expression, conversation_mode)
 
                             if joke_result:
                                 logger.info(f"Generated joke for {session_id}: {joke_result['joke_response']}")

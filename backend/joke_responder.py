@@ -35,34 +35,42 @@ class JokeResponder:
         self.joke_threshold = 0.0  # Threshold for deciding to respond with a joke
         self.max_response_length = 200  # Maximum length of joke response
         
-    async def should_respond_with_joke(self, text: str) -> Dict[str, Any]:
+    async def should_respond_with_joke(self, text: str, conversation_mode: bool = False) -> Dict[str, Any]:
         """
         Analyze the input text to determine if it's worth responding with a joke.
-        
+
         Args:
             text: The input text to analyze
-            
+            conversation_mode: If True, Polly should always reply regardless of other factors
+
         Returns:
             Dict containing decision, confidence, and reasoning
         """
         try:
+            conversation_mode_instruction = ""
+            if conversation_mode:
+                conversation_mode_instruction = """
+            CONVERSATION MODE ACTIVE: You should ALWAYS respond with a joke or funny comment, regardless of the content. In conversation mode, Polly responds to everything with humor, wit, or commentary.
+            """
+
             prompt = f"""
             Analyze the following text and determine if it would be appropriate to respond with a joke or funny quip.
-            
+            {conversation_mode_instruction}
             IMPORTANT: If the text addresses "Polly" OR "Paulie" (the AI assistant), you should ALWAYS respond with a joke, answer the question or funny quip, regardless of other factors.
-            
+
             Consider:
             1. Is the text asking a question or making a statement that could benefit from humor?
             2. Is the context appropriate for a lighthearted response?
             3. Would a joke add value to the conversation?
             4. Does the text address "Polly" or "Paulie" directly? (If yes, always respond!)
             5. Is someone being rude/mean to Polly/Paulie? (If yes, respond with sassy rebuttal!)
-            
+            6. Is conversation mode active? (If yes, always respond!)
+
             Text: "{text}"
-            
+
             Respond with a JSON object containing:
-            - "should_respond": boolean (true if worth responding with a joke OR if text addresses Polly/Paulie)
-            - "confidence": float (0.0 to 1.0, how confident you are - use 0.9+ if addressing Polly/Paulie)
+            - "should_respond": boolean (true if worth responding with a joke OR if text addresses Polly/Paulie OR if conversation mode is active)
+            - "confidence": float (0.0 to 1.0, how confident you are - use 0.9+ if addressing Polly/Paulie or in conversation mode)
             - "reasoning": string (brief explanation of your decision)
             - "joke_type": string (suggested type of joke: "pun", "observational", "wordplay", "situational", "polly_response", "cs_roast", "htn_roast", "world_domination", "sassy_rebuttal", or "none")
             """
@@ -199,13 +207,14 @@ class JokeResponder:
             logger.error(f"Error generating joke response: {e}")
             return None
     
-    async def process_text_for_joke(self, text: str, expression_data: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    async def process_text_for_joke(self, text: str, expression_data: Optional[Dict[str, Any]] = None, conversation_mode: bool = False) -> Optional[Dict[str, Any]]:
         """
         Main method to process text and determine if a joke response should be generated.
 
         Args:
             text: The input text to process
             expression_data: Optional facial expression data to incorporate
+            conversation_mode: If True, Polly will always reply regardless of other factors
 
         Returns:
             Dict with joke response data or None if no joke should be generated
@@ -214,11 +223,12 @@ class JokeResponder:
             return None
         
         # Analyze if we should respond with a joke
-        analysis = await self.should_respond_with_joke(text)
+        analysis = await self.should_respond_with_joke(text, conversation_mode)
         
-        if not analysis.get("should_respond", False):
-            logger.info(f"Not responding with joke for: '{text}' - {analysis.get('reasoning', 'No reason provided')}")
-            return None
+        if not conversation_mode:
+            if not analysis.get("should_respond", False):
+                logger.info(f"Not responding with joke for: '{text}' - {analysis.get('reasoning', 'No reason provided')}")
+                return None
         
         confidence = analysis.get("confidence", 0.0)
         
@@ -232,7 +242,7 @@ class JokeResponder:
         else:
             effective_threshold = self.joke_threshold
         
-        if confidence < effective_threshold:
+        if confidence < effective_threshold and not conversation_mode:
             logger.info(f"Confidence too low ({confidence}) for joke response to: '{text}' (threshold: {effective_threshold})")
             return None
         
@@ -243,7 +253,7 @@ class JokeResponder:
             confidence = expression_data.get("confidence", 0.0)
             description = expression_data.get("description", "")
 
-            if confidence > 0.4:  # Only use expression if confidence is reasonable
+            if confidence > 0.4 and not conversation_mode:  # Only use expression if confidence is reasonable
                 expression_context = f"The person appears to be {description}"
 
         # Generate the joke response
