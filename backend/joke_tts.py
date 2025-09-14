@@ -42,16 +42,17 @@ class JokeTTS:
         
         logger.info("JokeTTS initialized successfully")
     
-    async def speak_joke(self, joke_data: Dict[str, Any], play_audio: bool = True) -> Optional[bytes]:
+    async def speak_joke(self, joke_data: Dict[str, Any], play_audio: bool = True, stream: bool = False):
         """
         Convert a joke response to speech and optionally play it.
-        
+
         Args:
             joke_data: Dictionary containing joke response data from joke_responder
             play_audio: Whether to play the audio immediately (default: True)
-            
+            stream: If True, return generator for streaming, if False return bytes
+
         Returns:
-            Audio data as bytes if successful, None otherwise
+            Audio generator if stream=True, audio bytes if stream=False, None if error
         """
         try:
             if not joke_data or not joke_data.get("joke_response"):
@@ -62,8 +63,8 @@ class JokeTTS:
             joke_type = joke_data.get("joke_type", "general")
             confidence = joke_data.get("confidence", 0.0)
             
-            logger.info(f"Converting joke to speech: '{joke_text}' (Type: {joke_type}, Confidence: {confidence:.2f})")
-            
+            logger.info(f"Converting joke to speech: '{joke_text}' (Type: {joke_type}, Confidence: {confidence:.2f}, streaming: {stream})")
+
             # Convert text to speech
             audio = self.client.text_to_speech.convert(
                 text=joke_text,
@@ -71,32 +72,40 @@ class JokeTTS:
                 model_id=self.model_id,
                 output_format=self.output_format,
             )
-            
-            if play_audio:
-                logger.info("Playing joke audio...")
-                play.play(audio)
-                logger.info("Joke audio played successfully")
-            
-            return audio
+
+            if stream:
+                # Return the generator directly for streaming
+                return audio
+            else:
+                # Collect all chunks for non-streaming use
+                audio_bytes = b"".join(audio)
+
+                if play_audio:
+                    logger.info("Playing joke audio...")
+                    play.play(audio_bytes)
+                    logger.info("Joke audio played successfully")
+
+                return audio_bytes
             
         except Exception as e:
             logger.error(f"Error converting joke to speech: {e}")
             return None
     
-    async def speak_text(self, text: str, play_audio: bool = True) -> Optional[bytes]:
+    async def speak_text(self, text: str, play_audio: bool = True, stream: bool = False):
         """
         Convert any text to speech and optionally play it.
-        
+
         Args:
             text: Text to convert to speech
             play_audio: Whether to play the audio immediately (default: True)
-            
+            stream: If True, return generator for streaming, if False return bytes
+
         Returns:
-            Audio data as bytes if successful, None otherwise
+            Audio generator if stream=True, audio bytes if stream=False, None if error
         """
         try:
-            logger.info(f"Converting text to speech: '{text}'")
-            
+            logger.info(f"Converting text to speech: '{text}' (streaming: {stream})")
+
             # Convert text to speech
             audio = self.client.text_to_speech.convert(
                 text=text,
@@ -104,14 +113,21 @@ class JokeTTS:
                 model_id=self.model_id,
                 output_format=self.output_format,
             )
-            
-            if play_audio:
-                logger.info("Playing audio...")
-                play.play(audio)
-                logger.info("Audio played successfully")
-            
-            return audio
-            
+
+            if stream:
+                # Return the generator directly for streaming
+                return audio
+            else:
+                # Collect all chunks for non-streaming use
+                audio_bytes = b"".join(audio)
+
+                if play_audio:
+                    logger.info("Playing audio...")
+                    play.play(audio_bytes)
+                    logger.info("Audio played successfully")
+
+                return audio_bytes
+
         except Exception as e:
             logger.error(f"Error converting text to speech: {e}")
             return None

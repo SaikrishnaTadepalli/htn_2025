@@ -1,6 +1,7 @@
 import base64
 import logging
 import os
+import random
 from typing import Dict, Any
 from google.cloud import vision
 from config import GOOGLE_APPLICATION_CREDENTIALS
@@ -36,17 +37,22 @@ class FacialExpressionAnalyzer:
                 return {'success': False, 'error': 'Google Vision client not initialized'}
 
             # Decode base64 image
+            logger.debug(f"Decoding base64 frame data (length: {len(frame_data)})")
             img_bytes = base64.b64decode(frame_data)
+            logger.debug(f"Decoded image bytes (length: {len(img_bytes)})")
 
             # Create Vision API image object
             image = vision.Image(content=img_bytes)
+            logger.debug("Created Vision API image object")
 
             # Perform face detection with emotion analysis
             response = self.client.face_detection(image=image)
-            faces = response.face_annotations
-
+            
+            # Check for API errors first
             if response.error.message:
                 return {'success': False, 'error': f'Vision API error: {response.error.message}'}
+            
+            faces = response.face_annotations
 
             if not faces:
                 return {'success': False, 'expression': 'no_face', 'confidence': 0.0}
@@ -212,3 +218,148 @@ class FacialExpressionAnalyzer:
             comments.append("trying to smile through frustration")
 
         return " • ".join(comments) if comments else ""
+
+    def should_generate_joke(self, probability: float = 0.15) -> bool:
+        """Determine if we should generate a joke based on probability."""
+        return random.random() < probability
+
+    def generate_facial_joke(self, result: Dict[str, Any]) -> str:
+        """Generate a random joke or comment based on facial analysis."""
+        if not result.get('success') or 'metadata' not in result:
+            return ""
+
+        metadata = result['metadata']
+        expression = result.get('expression', 'neutral')
+        emotions = metadata.get('all_emotions', {})
+        
+        # Joke templates based on facial features
+        jokes = []
+        
+        # Expression-based jokes
+        if expression == 'joy':
+            jokes.extend([
+                "Oh look, someone's happy! Must be nice being so easily amused 😏",
+                "That smile is cute, but I've seen better on my reflection 😊",
+                "Someone's having a good day! Meanwhile I'm here being perfect as always",
+                "Your smile is nice, but my algorithms are way more impressive! 😄"
+            ])
+        elif expression == 'sorrow':
+            jokes.extend([
+                "Aww, someone's sad! Don't worry, I'm here to make you feel better 😢",
+                "That frown is giving 'I wish I was as smart as the AI' vibes",
+                "Cheer up! At least you have me to analyze your face perfectly",
+                "Someone's having a rough day! Good thing I'm here to cheer you up"
+            ])
+        elif expression == 'anger':
+            jokes.extend([
+                "Whoa there! Someone's mad! Maybe you're jealous of my perfection? 😤",
+                "That face says 'I'm angry because the AI is better than me'",
+                "Someone's clearly frustrated! Don't worry, I'll analyze your anger perfectly",
+                "That's quite the angry face! I bet you're mad I'm so good at this"
+            ])
+        elif expression == 'surprise':
+            jokes.extend([
+                "Wow! Did someone just realize how amazing I am? 😲",
+                "That look says 'I can't believe this AI is so good at reading faces'",
+                "Surprise! You're surprised by my incredible facial analysis skills!",
+                "Plot twist! You're amazed by how perfect my detection is! 😄"
+            ])
+        else:
+            jokes.extend([
+                "That's giving 'I'm trying to understand how this AI works' 🤔",
+                "Someone's clearly pondering why I'm so much better than humans",
+                "That's quite the 'I'm impressed by this AI' face",
+                "Poker face? More like 'I'm amazed by this AI' face! 🎭"
+            ])
+        
+        # Head pose jokes
+        roll = abs(metadata.get('roll_angle', 0))
+        pan = abs(metadata.get('pan_angle', 0))
+        tilt = abs(metadata.get('tilt_angle', 0))
+        
+        if roll > 15:
+            jokes.extend([
+                "That head tilt is giving 'I'm confused by how amazing this AI is' 🤔",
+                "Someone's trying to understand my superior facial analysis... good luck!",
+                "That's quite the dramatic head angle! Very 'I'm impressed by this AI' of you"
+            ])
+        
+        if pan > 20:
+            direction = "left" if metadata.get('pan_angle', 0) < 0 else "right"
+            jokes.extend([
+                f"Looking {direction}... trying to avoid admitting how good I am?",
+                f"That {direction} turn is giving 'I'm pretending not to be amazed' vibes",
+                f"Checking out the {direction} side of life! Meanwhile I'm here being perfect"
+            ])
+        
+        if tilt > 15:
+            direction = "up" if metadata.get('tilt_angle', 0) > 0 else "down"
+            jokes.extend([
+                f"Looking {direction}... pondering why I'm so much better than humans?",
+                f"That {direction} gaze is giving 'I'm in awe of this AI'",
+                f"Contemplating the {direction}ward direction! Very 'I'm amazed by this AI'"
+            ])
+        
+        # Physical attribute jokes
+        if metadata.get('headwear_likelihood', 0) > 0.5:
+            jokes.extend([
+                "That headwear is nice, but my detection skills are way more stylish! 👒",
+                "Someone's trying to look fancy! Meanwhile I'm here being effortlessly perfect",
+                "That accessory is cute, but my facial analysis is the real fashion statement!"
+            ])
+        
+        if metadata.get('blurred_likelihood', 0) > 0.5:
+            jokes.extend([
+                "That blur is giving 'I'm moving too fast for humans to keep up' vibes! 😄",
+                "Someone's moving so fast they're blurry! Good thing I can still analyze you perfectly",
+                "That's quite the artistic blur! Meanwhile I'm here with crystal clear detection!"
+            ])
+        
+        if metadata.get('under_exposed_likelihood', 0) > 0.5:
+            jokes.extend([
+                "That lighting is giving 'I'm mysterious' but I can still see you perfectly! 💡",
+                "Very moody lighting! Perfect for hiding from inferior facial analysis systems",
+                "Someone's playing hide and seek with the light! Joke's on you, I can still detect you!"
+            ])
+        
+        # Detection quality jokes
+        detection_conf = metadata.get('detection_confidence', 0)
+        if detection_conf > 0.95:
+            jokes.extend([
+                "That detection is giving 4K HD perfection! Just like me! ✨",
+                "Someone's face is crystal clear! Almost as clear as my superiority!",
+                "That's some high-definition face detection! I'm just that good!"
+            ])
+        
+        # Mixed emotions jokes
+        high_emotions = [k for k, v in emotions.items() if v > 0.4]
+        if len(high_emotions) > 1:
+            jokes.extend([
+                f"Showing mixed emotions: {', '.join(high_emotions)}! Very complex! Meanwhile I'm perfectly consistent",
+                "That's quite the emotional cocktail! I bet you're confused by how amazing I am! 🍹",
+                "Multiple emotions detected! Someone's having a crisis while I'm here being perfect!"
+            ])
+        
+        # Special mixed emotion scenarios
+        joy_score = emotions.get('joy', 0)
+        sorrow_score = emotions.get('sorrow', 0)
+        if joy_score > 0.3 and sorrow_score > 0.3:
+            jokes.extend([
+                "Bittersweet expression! Very human of you! Meanwhile I'm just perfect",
+                "That's quite the emotional rollercoaster! Good thing I'm here to analyze it perfectly",
+                "Joy and sorrow having a conversation! Very dramatic! I'm just here being superior!"
+            ])
+        
+        anger_score = emotions.get('anger', 0)
+        if joy_score > 0.4 and anger_score > 0.3:
+            jokes.extend([
+                "Trying to smile through your frustration! I respect that! Meanwhile I'm effortlessly perfect 😤😊",
+                "That's the spirit! Smile through the chaos! I'm here analyzing it perfectly",
+                "Joy and anger having a conversation! Very complex! Good thing I can handle it!"
+            ])
+        
+        # Return a random joke if any are available
+        if jokes:
+            return random.choice(jokes)
+        
+        return ""

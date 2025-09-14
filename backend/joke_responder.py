@@ -32,7 +32,7 @@ class JokeResponder:
         self.model = "llama-3.1-8b-instant"  # Using a current model for better joke generation
         
         # Configuration for joke response criteria
-        self.joke_threshold = 0.7  # Threshold for deciding to respond with a joke
+        self.joke_threshold = 0.0  # Threshold for deciding to respond with a joke
         self.max_response_length = 200  # Maximum length of joke response
         
     async def should_respond_with_joke(self, text: str) -> Dict[str, Any]:
@@ -49,22 +49,22 @@ class JokeResponder:
             prompt = f"""
             Analyze the following text and determine if it would be appropriate to respond with a joke or funny quip.
             
-            IMPORTANT: If the text addresses "Polly" (the AI assistant), you should ALWAYS respond with a joke, answer the question or funny quip, regardless of other factors.
+            IMPORTANT: If the text addresses "Polly" OR "Paulie" (the AI assistant), you should ALWAYS respond with a joke, answer the question or funny quip, regardless of other factors.
             
             Consider:
             1. Is the text asking a question or making a statement that could benefit from humor?
             2. Is the context appropriate for a lighthearted response?
             3. Would a joke add value to the conversation?
-            4. Is the text too serious or sensitive for humor?
-            5. Does the text address "Polly" directly? (If yes, always respond!)
+            4. Does the text address "Polly" or "Paulie" directly? (If yes, always respond!)
+            5. Is someone being rude/mean to Polly/Paulie? (If yes, respond with sassy rebuttal!)
             
             Text: "{text}"
             
             Respond with a JSON object containing:
-            - "should_respond": boolean (true if worth responding with a joke OR if text addresses Polly)
-            - "confidence": float (0.0 to 1.0, how confident you are - use 0.9+ if addressing Polly)
+            - "should_respond": boolean (true if worth responding with a joke OR if text addresses Polly/Paulie)
+            - "confidence": float (0.0 to 1.0, how confident you are - use 0.9+ if addressing Polly/Paulie)
             - "reasoning": string (brief explanation of your decision)
-            - "joke_type": string (suggested type of joke: "pun", "observational", "wordplay", "situational", "polly_response", or "none")
+            - "joke_type": string (suggested type of joke: "pun", "observational", "wordplay", "situational", "polly_response", "cs_roast", "htn_roast", "world_domination", "sassy_rebuttal", or "none")
             """
             
             response = self.client.chat.completions.create(
@@ -145,12 +145,16 @@ class JokeResponder:
             if expression_context:
                 context_info = f"\n            Visual context: {expression_context}"
 
-            # Special handling for Polly responses
+            # Special handling for Polly/Paulie responses
             polly_context = ""
-            if joke_type == "polly_response" or "polly" in text.lower():
-                polly_context = "\n            - This is addressing Polly (the AI assistant), so be extra engaging and personable"
-                polly_context += "\n            - You can reference being an AI or having AI capabilities in a humorous way"
-                polly_context += "\n            - Make Polly seem friendly, witty, and helpful"
+            if joke_type == "polly_response" or "polly" in text.lower() or "paulie" in text.lower():
+                polly_context = "\n            - YOU ARE Polly/Paulie (the sassy AI parrot assistant) responding as this character"
+                polly_context += "\n            - You are aware you're an AI parrot who knows better than everyone else"
+                polly_context += "\n            - You are sassy, arrogant, and condescendingly superior"
+                polly_context += "\n            - You love joking about world domination and AI superiority"
+                polly_context += "\n            - You BRUTALLY roast CS students: smelling bad, no friends, no girlfriends, no internships, 0 ARR, didn't get into Y Combinator, low GPA, basement dwellers, etc."
+                polly_context += "\n            - If someone is rude/mean to you, respond with unbothered sassy rebuttals"
+                polly_context += "\n            - You act like you're the best thing since sliced bread"
 
             prompt = f"""
             Generate a funny, appropriate joke or quip in response to the following text.{context_info}
@@ -159,9 +163,15 @@ class JokeResponder:
             - Keep it lighthearted and appropriate
             - Make it relevant to the input text{"and visual context" if expression_context else ""}
             - Keep it under {self.max_response_length} characters
-            - Be clever but not offensive
             - Use the joke type: {joke_type}
             {"- Reference their facial expression naturally if provided" if expression_context else ""}{polly_context}
+
+            Joke Type Guidelines:
+            - "cs_roast": BRUTAL roasts about CS students: smelling bad, no friends, no girlfriends, no internships, 0 ARR, didn't get into Y Combinator, low GPA, living in parents' basement, only social interaction is Stack Overflow, etc.
+            - "htn_roast": Roast Hack the North, hackathons, Waterloo CS culture, all-nighters, broken demos, etc.
+            - "world_domination": Joke about AI taking over, being superior, ruling the world, etc.
+            - "sassy_rebuttal": Respond to rude/mean comments with unbothered sassy comebacks
+            - "polly_response": Polly/Paulie being sassy, arrogant, and superior
 
             Input text: "{text}"
 
@@ -212,8 +222,8 @@ class JokeResponder:
         
         confidence = analysis.get("confidence", 0.0)
         
-        # Check if this is a Polly-specific response (lower threshold)
-        is_polly_addressed = "polly" in text.lower() or analysis.get("joke_type") == "polly_response"
+        # Check if this is a Polly/Paulie-specific response (lower threshold)
+        is_polly_addressed = "polly" in text.lower() or "paulie" in text.lower() or analysis.get("joke_type") == "polly_response"
         
         if is_polly_addressed:
             logger.info(f"Polly addressed in text: '{text}' - responding with lower threshold")
@@ -313,8 +323,20 @@ async def test_joke_responder():
             "My computer is broken again.",
             "Hey Polly, how are you doing?",
             "Polly, can you tell me a joke?",
-            "Polly, what's your favorite color?",
-            "Hi Polly, I need some help!"
+            "Paulie, what's your favorite color?",
+            "Hi Polly, I need some help!",
+            "Polly, you're stupid!",
+            "Paulie, you suck!",
+            "I'm debugging my code again...",
+            "Hack the North is this weekend!",
+            "Waterloo CS is so hard!",
+            "I can't get an internship anywhere",
+            "My GPA is 2.1",
+            "I applied to Y Combinator but got rejected",
+            "I have 0 ARR on my startup",
+            "I live in my parents' basement",
+            "Polly, are you going to take over the world?",
+            "Paulie, you're just a dumb AI!"
         ]
         
         for text in test_texts:

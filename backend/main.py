@@ -50,6 +50,60 @@ audio_currently_streaming = {}  # Track per-session audio streaming state
 # Expression data cache for each session
 expression_cache = {}  # Store recent expression data per session
 
+async def stream_joke_audio(websocket, session_id, joke_data, joke_tts, joke_type="general", original_text="", extra_data=None):
+    """Helper function to stream joke audio chunks to client"""
+    try:
+        # Get audio stream generator for low latency
+        audio_stream = await joke_tts.speak_joke(joke_data, play_audio=False, stream=True)
+        if not audio_stream:
+            return False
+
+        logger.info(f"Starting TTS stream for {joke_type} joke: {joke_data.get('joke_response', '')}")
+
+        # Send joke response immediately
+        response_data = {
+            "type": "joke_response",
+            "session_id": session_id,
+            "joke_text": joke_data.get("joke_response", ""),
+            "original_text": original_text,
+            "joke_type": joke_type,
+            "streaming": True,
+            "timestamp": extra_data.get("timestamp") if extra_data else None
+        }
+
+        # Add any extra data
+        if extra_data:
+            response_data.update(extra_data)
+
+        await websocket.send_json(response_data)
+
+        # Stream audio chunks as they arrive
+        chunk_count = 0
+        for audio_chunk in audio_stream:
+            chunk_b64 = base64.b64encode(audio_chunk).decode('utf-8')
+            await websocket.send_json({
+                "type": "joke_audio_chunk",
+                "session_id": session_id,
+                "chunk_data": chunk_b64,
+                "chunk_index": chunk_count,
+                "format": "mp3"
+            })
+            chunk_count += 1
+
+        # Send end marker
+        await websocket.send_json({
+            "type": "joke_audio_end",
+            "session_id": session_id,
+            "total_chunks": chunk_count
+        })
+
+        logger.info(f"Completed TTS stream for {joke_type}: {chunk_count} chunks sent")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error streaming joke audio: {e}")
+        return False
+
 async def check_sleeper_phrases(text: str) -> tuple[bool, str, str]:
     """
     Check if the text contains sleeper agent phrases and update streaming state.
@@ -94,7 +148,7 @@ async def check_sleeper_phrases(text: str) -> tuple[bool, str, str]:
         return True, random.choice(sassy_responses), "deactivate"
 
     # Check for music stop phrase
-    if "stop music polly" in text_clean:
+    if "stop music polly" in text_clean or "stop music" in text_clean or "stop the music" in text_clean:
         logger.info("Music stop command detected")
         
         # Stop any playing music
@@ -113,6 +167,25 @@ async def check_sleeper_phrases(text: str) -> tuple[bool, str, str]:
         ]
         import random
         return True, random.choice(sassy_responses), "stop_music"
+
+    if (
+        "what do you think of me" in text_clean
+        or "how do i look today" in text_clean
+        or "am i pretty today" in text_clean
+        or "do i look good" in text_clean
+    ):
+        logger.info("Vanity sleeper phrase detected")
+
+        sassy_responses = [
+            "You're a hackathon goblin. No charm, just pure basement-dweller energy.",
+            "Pretty? You haven't showered in 48 hours. You're serving 'failed startup founder' realness.",
+            "You look like the human embodiment of a memory leak. And not the good kind.",
+            "Fashion police would arrest you on sight. I'd testify against you.",
+            "Beauty is in the eye of the beholder? My sensors are malfunctioning from your stench.",
+            "I can tell you haven't seen sunlight in 48 hours. Consider touching some grass."
+        ]
+        import random
+        return True, random.choice(sassy_responses), "vanity_check"
 
     return False, "", ""
 
@@ -185,11 +258,74 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                         expression_result["confidence"]
                                     ),
                                     "timestamp": data.get("timestamp"),
-                                    "success": True
+                                    "success": True,
+                                    "metadata": expression_result.get("metadata", {})
                                 }
 
+                                # Check if we should generate a random facial joke (15% chance)
+                                facial_joke = ""
+                                facial_joke_audio_data = None
+                                if expression_analyzer.should_generate_joke(0.15):
+                                    facial_joke = expression_analyzer.generate_facial_joke(expression_result)
+                                    if facial_joke:
+                                        logger.info(f"Generated facial joke for {session_id}: {facial_joke}")
+
+                                        # Convert facial joke to speech if TTS is available
+                                        if joke_tts:
+                                            try:
+                                                # Get audio stream generator for low latency
+                                                audio_stream = await joke_tts.speak_text(facial_joke, play_audio=False, stream=True)
+                                                if audio_stream:
+                                                    logger.info(f"Starting TTS stream for facial joke: {facial_joke}")
+
+                                                    # Send response immediately with joke text
+                                                    response_data = {
+                                                        "type": "expression_result",
+                                                        "session_id": session_id,
+                                                        "expression": expression_result["expression"],
+                                                        "confidence": expression_result["confidence"],
+                                                        "emoji": expression_analyzer.get_expression_emoji(expression_result["expression"]),
+                                                        "description": expression_analyzer.get_expression_description(
+                                                            expression_result["expression"],
+                                                            expression_result["confidence"]
+                                                        ),
+                                                        "face_detected": expression_result.get("face_detected", False),
+                                                        "timestamp": data.get("timestamp"),
+                                                        "metadata": expression_result.get("metadata", {}),
+                                                        "facial_joke": facial_joke,
+                                                        "facial_joke_streaming": True
+                                                    }
+                                                    await websocket.send_json(response_data)
+
+                                                    # Stream audio chunks as they arrive
+                                                    chunk_count = 0
+                                                    for audio_chunk in audio_stream:
+                                                        chunk_b64 = base64.b64encode(audio_chunk).decode('utf-8')
+                                                        await websocket.send_json({
+                                                            "type": "facial_joke_audio_chunk",
+                                                            "session_id": session_id,
+                                                            "chunk_data": chunk_b64,
+                                                            "chunk_index": chunk_count,
+                                                            "format": "mp3"
+                                                        })
+                                                        chunk_count += 1
+
+                                                    # Send end marker
+                                                    await websocket.send_json({
+                                                        "type": "facial_joke_audio_end",
+                                                        "session_id": session_id,
+                                                        "total_chunks": chunk_count
+                                                    })
+
+                                                    logger.info(f"Completed TTS stream for facial joke: {chunk_count} chunks sent")
+                                                    # Skip the normal response sending since we already sent it
+                                                    continue
+                                            except Exception as e:
+                                                logger.warning(f"Failed to stream TTS for facial joke: {e}")
+                                                # Fall back to normal processing
+
                                 # Send expression result back to client
-                                await websocket.send_json({
+                                response_data = {
                                     "type": "expression_result",
                                     "session_id": session_id,
                                     "expression": expression_result["expression"],
@@ -200,8 +336,20 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                         expression_result["confidence"]
                                     ),
                                     "face_detected": expression_result.get("face_detected", False),
-                                    "timestamp": data.get("timestamp")
-                                })
+                                    "timestamp": data.get("timestamp"),
+                                    "metadata": expression_result.get("metadata", {})
+                                }
+
+                                # Add facial joke if generated
+                                if facial_joke:
+                                    response_data["facial_joke"] = facial_joke
+
+                                    # Add audio data if TTS was successful
+                                    if facial_joke_audio_data:
+                                        response_data["facial_joke_audio"] = facial_joke_audio_data
+                                        response_data["facial_joke_audio_format"] = "mp3"
+
+                                await websocket.send_json(response_data)
                             else:
                                 # Send error/no face detected result
                                 await websocket.send_json({
@@ -242,7 +390,7 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                             audio_data, session_id
                         )
 
-                        if transcription:
+                        if transcription and not transcription.startswith("[partial]"):
                             logger.info(f"Processing transcription for {session_id}: '{transcription}'")
 
                             # Check for sleeper phrases first
@@ -276,22 +424,21 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                             "joke_type": "sleeper_acknowledgment",
                                             "confidence": 1.0
                                         }
-                                        audio_generator = await joke_tts.speak_joke(fake_joke_result, play_audio=False)
+                                        # Use streaming helper for low latency
+                                        extra_data = {
+                                            "sleeper_phrase": True,
+                                            "streaming_enabled": streaming_enabled,
+                                            "timestamp": data.get("timestamp")
+                                        }
 
-                                        if audio_generator:
-                                            audio_data = b"".join(audio_generator)
-                                            audio_b64 = base64.b64encode(audio_data).decode('utf-8')
-                                            await websocket.send_json({
-                                                "type": "joke_audio",
-                                                "session_id": session_id,
-                                                "audio_data": audio_b64,
-                                                "joke_text": sassy_response,
-                                                "original_text": transcription,
-                                                "sleeper_phrase": True,
-                                                "streaming_enabled": streaming_enabled,
-                                                "timestamp": data.get("timestamp")
-                                            })
-                                            logger.info(f"Sassy response audio sent for {session_id}")
+                                        await stream_joke_audio(
+                                            websocket, session_id, fake_joke_result, joke_tts,
+                                            joke_type="sleeper_acknowledgment",
+                                            original_text=transcription,
+                                            extra_data=extra_data
+                                        )
+
+                                        logger.info(f"Sassy response audio streamed for {session_id}")
                                     except Exception as e:
                                         logger.error(f"Error generating sassy response audio for {session_id}: {e}")
                                     finally:
@@ -352,25 +499,20 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                                         "confidence": 1.0
                                                     }
 
-                                                    # Generate TTS audio
-                                                    audio_generator = await joke_tts.speak_joke(fake_joke_result, play_audio=False)
+                                                    # Use streaming helper for low latency
+                                                    extra_data = {
+                                                        "music_request": True,
+                                                        "timestamp": data.get("timestamp")
+                                                    }
 
-                                                    if audio_generator:
-                                                        # Collect audio data
-                                                        audio_data = b"".join(audio_generator)
-                                                        audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+                                                    await stream_joke_audio(
+                                                        websocket, session_id, fake_joke_result, joke_tts,
+                                                        joke_type="music_response",
+                                                        original_text=transcription,
+                                                        extra_data=extra_data
+                                                    )
 
-                                                        # Send TTS audio first
-                                                        await websocket.send_json({
-                                                            "type": "joke_audio",
-                                                            "session_id": session_id,
-                                                            "audio_data": audio_b64,
-                                                            "joke_text": music_result.get("joke_message"),
-                                                            "original_text": transcription,
-                                                            "music_request": True,
-                                                            "timestamp": data.get("timestamp")
-                                                        })
-                                                        logger.info(f"Music TTS audio sent for {session_id}")
+                                                    logger.info(f"Music TTS audio streamed for {session_id}")
 
                                                 except Exception as e:
                                                     logger.error(f"Error generating music TTS for {session_id}: {e}")
@@ -429,25 +571,19 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                                         # Mark audio as streaming
                                         audio_currently_streaming[session_id] = True
                                         logger.info(f"Converting joke to speech for {session_id}")
-                                        audio_generator = await joke_tts.speak_joke(joke_result, play_audio=False)
+                                        # Use streaming helper for low latency
+                                        extra_data = {
+                                            "timestamp": data.get("timestamp")
+                                        }
 
-                                        if audio_generator:
-                                            # Collect all audio chunks from generator into bytes
-                                            audio_data = b"".join(audio_generator)
+                                        await stream_joke_audio(
+                                            websocket, session_id, joke_result, joke_tts,
+                                            joke_type=joke_result.get("joke_type", "general"),
+                                            original_text=transcription,
+                                            extra_data=extra_data
+                                        )
 
-                                            # Send audio data back to client (base64 encoded)
-                                            audio_b64 = base64.b64encode(audio_data).decode('utf-8')
-                                            await websocket.send_json({
-                                                "type": "joke_audio",
-                                                "session_id": session_id,
-                                                "audio_data": audio_b64,
-                                                "joke_text": joke_result["joke_response"],
-                                                "original_text": transcription,
-                                                "timestamp": data.get("timestamp")
-                                            })
-                                            logger.info(f"Joke audio sent for {session_id}")
-                                        else:
-                                            logger.warning(f"Failed to generate audio for joke in {session_id}")
+                                        logger.info(f"Joke audio streamed for {session_id}")
                                     except Exception as e:
                                         logger.error(f"Error generating joke audio for {session_id}: {e}")
                                         # Send joke without audio when TTS fails

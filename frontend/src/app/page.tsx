@@ -23,6 +23,80 @@ export default function Home() {
     emoji: string
     confidence: number
   } | null>(null)
+  const [isPlayingFacialJoke, setIsPlayingFacialJoke] = useState(false)
+
+  // Streaming audio state
+  const streamingAudioRef = useRef<{
+    chunks: Uint8Array[]
+    expectedChunks?: number
+    sessionId: string
+    type: string
+  } | null>(null)
+
+  // Helper function to play streaming audio
+  const playStreamingAudio = (chunks: Uint8Array[], audioType: string) => {
+    try {
+      // Combine all chunks into one array
+      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+      const combinedArray = new Uint8Array(totalLength)
+      let offset = 0
+
+      chunks.forEach(chunk => {
+        combinedArray.set(chunk, offset)
+        offset += chunk.length
+      })
+
+      const audioBlob = new Blob([combinedArray], { type: 'audio/mpeg' })
+      const audioUrl = URL.createObjectURL(audioBlob)
+
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause()
+        currentAudioRef.current.currentTime = 0
+      }
+
+      const audio = new Audio(audioUrl)
+      audio.preload = 'auto'
+      audio.crossOrigin = 'anonymous'
+
+      currentAudioRef.current = audio
+      setIsPlayingAudio(true)
+
+      if (audioType.includes('facial')) {
+        setIsPlayingFacialJoke(true)
+      }
+
+      audio.onended = () => {
+        setIsPlayingAudio(false)
+        setIsPlayingFacialJoke(false)
+        currentAudioRef.current = null
+        URL.revokeObjectURL(audioUrl)
+      }
+
+      audio.onerror = (error) => {
+        console.error('Streaming audio element error:', error)
+        setIsPlayingAudio(false)
+        setIsPlayingFacialJoke(false)
+        currentAudioRef.current = null
+        URL.revokeObjectURL(audioUrl)
+      }
+
+      const playPromise = audio.play()
+      if (playPromise !== undefined) {
+        playPromise.catch(error => {
+          console.error('Streaming audio play failed:', error)
+          setIsPlayingAudio(false)
+          setIsPlayingFacialJoke(false)
+        })
+      }
+
+      console.log(`Playing streaming ${audioType} audio: ${chunks.length} chunks combined`)
+
+    } catch (e) {
+      console.error('Error playing streaming audio:', e)
+      setIsPlayingAudio(false)
+      setIsPlayingFacialJoke(false)
+    }
+  }
 
   // Function to capture and send video frames
   const captureAndSendFrame = (sessionId: string, ws: WebSocket) => {
@@ -112,6 +186,7 @@ export default function Home() {
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data)
+            console.log('Received message:', data.type, data)
 
             if (data.type === 'transcription') {
               setTranscription(data.text || '')
@@ -133,6 +208,89 @@ export default function Home() {
                 })
               } else {
                 setCurrentExpression(null)
+              }
+
+              // Display facial joke if present
+              if (data.facial_joke) {
+                setJokeResponse(data.facial_joke)
+
+                // If streaming is enabled, prepare to collect chunks
+                if (data.facial_joke_streaming) {
+                  streamingAudioRef.current = {
+                    chunks: [],
+                    sessionId: data.session_id,
+                    type: 'facial_joke'
+                  }
+                  console.log('Started collecting facial joke audio chunks')
+                }
+              }
+
+              // Handle facial joke audio if present (non-streaming)
+              if (data.facial_joke_audio && !data.facial_joke_streaming) {
+                if (currentAudioRef.current) {
+                  currentAudioRef.current.pause()
+                  currentAudioRef.current.currentTime = 0
+                }
+
+                // Play facial joke audio
+                try {
+                  const audioData = atob(data.facial_joke_audio)
+
+                  const audioBytes = new Uint8Array(audioData.length)
+                  for (let i = 0; i < audioData.length; i++) {
+                    audioBytes[i] = audioData.charCodeAt(i)
+                  }
+
+                  const audioBlob = new Blob([audioBytes], { type: 'audio/mpeg' })
+                  const audioUrl = URL.createObjectURL(audioBlob)
+
+                  const audio = new Audio(audioUrl)
+
+                  // Set additional properties for better compatibility
+                  audio.preload = 'auto'
+                  audio.crossOrigin = 'anonymous'
+
+                  currentAudioRef.current = audio
+                  setIsPlayingAudio(true)
+                  setIsPlayingFacialJoke(true)
+
+                  audio.onended = () => {
+                    setIsPlayingAudio(false)
+                    setIsPlayingFacialJoke(false)
+                    currentAudioRef.current = null
+                    URL.revokeObjectURL(audioUrl)
+                  }
+
+                  audio.onerror = (error) => {
+                    console.error('Facial joke audio element error:', error)
+                    setIsPlayingAudio(false)
+                    setIsPlayingFacialJoke(false)
+                    currentAudioRef.current = null
+                    URL.revokeObjectURL(audioUrl)
+                  }
+
+                  const playPromise = audio.play()
+                  if (playPromise !== undefined) {
+                    playPromise.catch(error => {
+                      console.error('Facial joke audio play failed:', error)
+                      setIsPlayingAudio(false)
+                      setIsPlayingFacialJoke(false)
+
+                      // Try alternative approach: force load first
+                      audio.load()
+                      setTimeout(() => {
+                        audio.play().catch(() => {
+                          setIsPlayingAudio(false)
+                          setIsPlayingFacialJoke(false)
+                        })
+                      }, 100)
+                    })
+                  }
+                } catch (e) {
+                  console.error('Error playing facial joke audio:', e)
+                  setIsPlayingAudio(false)
+                  setIsPlayingFacialJoke(false)
+                }
               }
             } else if ((data.type === 'joke_audio' || data.type === 'music_audio') && data.audio_data) {
               if (currentAudioRef.current) {
@@ -174,12 +332,6 @@ export default function Home() {
                   URL.revokeObjectURL(audioUrl)
                 }
 
-                audio.onended = () => {
-                  setIsPlayingAudio(false)
-                  currentAudioRef.current = null
-                  URL.revokeObjectURL(audioUrl)
-                }
-
                 const playPromise = audio.play()
                 if (playPromise !== undefined) {
                   playPromise.catch(error => {
@@ -196,6 +348,64 @@ export default function Home() {
               } catch (e) {
                 console.error('Error playing audio:', e)
                 setIsPlayingAudio(false)
+              }
+            } else if (data.type === 'joke_response' && data.streaming) {
+              // Handle streaming joke response - display text immediately
+              setJokeResponse(data.joke_text || '')
+              setTranscription(data.original_text || '')
+
+              // Prepare to collect streaming audio chunks
+              streamingAudioRef.current = {
+                chunks: [],
+                sessionId: data.session_id,
+                type: 'joke'
+              }
+              console.log('Started collecting joke audio chunks')
+
+            } else if (data.type === 'joke_audio_chunk' || data.type === 'facial_joke_audio_chunk') {
+              // Handle streaming audio chunks
+              console.log('Processing audio chunk, streamingAudioRef status:', streamingAudioRef.current)
+
+              if (streamingAudioRef.current && streamingAudioRef.current.sessionId === data.session_id) {
+                try {
+                  const chunkData = atob(data.chunk_data)
+                  const chunkBytes = new Uint8Array(chunkData.length)
+                  for (let i = 0; i < chunkData.length; i++) {
+                    chunkBytes[i] = chunkData.charCodeAt(i)
+                  }
+
+                  streamingAudioRef.current.chunks.push(chunkBytes)
+                  console.log(`Received audio chunk ${data.chunk_index}: ${chunkBytes.length} bytes (total chunks: ${streamingAudioRef.current.chunks.length})`)
+                } catch (e) {
+                  console.error('Error processing audio chunk:', e)
+                }
+              } else {
+                console.warn('Received audio chunk but streamingAudioRef not set up:', {
+                  hasStreamingRef: !!streamingAudioRef.current,
+                  expectedSession: streamingAudioRef.current?.sessionId,
+                  receivedSession: data.session_id
+                })
+
+                // Emergency fallback: set up streaming ref if missing
+                if (!streamingAudioRef.current) {
+                  streamingAudioRef.current = {
+                    chunks: [],
+                    sessionId: data.session_id,
+                    type: 'joke'
+                  }
+                  console.log('Emergency: Created streamingAudioRef for session:', data.session_id)
+                }
+              }
+
+            } else if (data.type === 'joke_audio_end' || data.type === 'facial_joke_audio_end') {
+              // Audio streaming complete - play combined chunks
+              if (streamingAudioRef.current && streamingAudioRef.current.sessionId === data.session_id) {
+                console.log(`Audio streaming complete: ${data.total_chunks} chunks received`)
+
+                playStreamingAudio(streamingAudioRef.current.chunks, streamingAudioRef.current.type)
+
+                // Clean up
+                streamingAudioRef.current = null
               }
             }
           } catch (e) {
@@ -302,6 +512,14 @@ export default function Home() {
             <span className="text-xs opacity-75">
               ({Math.round(currentExpression.confidence * 100)}%)
             </span>
+          </div>
+        )}
+
+        {/* Facial joke playing indicator */}
+        {isPlayingFacialJoke && (
+          <div className="bg-pink-500 text-white px-3 py-1 rounded-full text-sm font-medium flex items-center space-x-2 animate-pulse">
+            <span className="text-lg">🎭</span>
+            <span>Facial Joke Playing</span>
           </div>
         )}
       </div>
