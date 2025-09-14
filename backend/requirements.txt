@@ -12,3 +12,9 @@ deepgram-sdk
 spotipy
 yt-dlp
 google-cloud-vision
+databricks-sql-connector
+databricks-connect
+pandas
+scikit-learn
+plotly
+dash
