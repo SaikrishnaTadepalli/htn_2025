@@ -5,17 +5,71 @@ import { getWebSocketUrl } from '../config/websocket'
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const processorRef = useRef<any>(null)
   const currentAudioRef = useRef<HTMLAudioElement | null>(null)
+  const frameIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const [transcription, setTranscription] = useState('')
   const [jokeResponse, setJokeResponse] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [, setIsPlayingAudio] = useState(false)
+  const [currentExpression, setCurrentExpression] = useState<{
+    expression: string
+    emoji: string
+    confidence: number
+  } | null>(null)
+
+  // Function to capture and send video frames
+  const captureAndSendFrame = (sessionId: string, ws: WebSocket) => {
+    if (!videoRef.current || !canvasRef.current || ws.readyState !== WebSocket.OPEN) {
+      return
+    }
+
+    try {
+      const video = videoRef.current
+      const canvas = canvasRef.current
+      const ctx = canvas.getContext('2d')
+
+      if (!ctx || video.readyState < 2) {
+        return // Video not ready
+      }
+
+      // Set canvas size for optimal MediaPipe processing (square aspect ratio)
+      canvas.width = 416
+      canvas.height = 416
+
+      // Draw video frame to canvas (will automatically scale/crop)
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+      // Convert canvas to blob and then to base64
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const reader = new FileReader()
+          reader.onload = () => {
+            const base64Data = reader.result as string
+            const frameData = base64Data.split(',')[1] // Remove data:image/jpeg;base64, prefix
+
+            // Send frame data to backend
+            ws.send(JSON.stringify({
+              type: 'video_frame',
+              session_id: sessionId,
+              frame_data: frameData,
+              timestamp: Date.now()
+            }))
+          }
+          reader.readAsDataURL(blob)
+        }
+      }, 'image/jpeg', 0.8) // JPEG with 80% quality for balance of size/quality
+
+    } catch (error) {
+      console.error('Error capturing frame:', error)
+    }
+  }
 
   useEffect(() => {
     const startEverything = async () => {
@@ -48,6 +102,11 @@ export default function Home() {
             type: 'session_start',
             session_id: sessionId
           }))
+
+          // Start sending video frames every 2 seconds (aligned with audio processing)
+          frameIntervalRef.current = setInterval(() => {
+            captureAndSendFrame(sessionId, ws)
+          }, 2000)
         }
 
         ws.onmessage = (event) => {
@@ -64,6 +123,17 @@ export default function Home() {
               setTranscription(data.original_text || '')
             } else if (data.type === 'joke_tts_failed') {
               setJokeResponse(data.joke_text || '')
+            } else if (data.type === 'expression_result') {
+              // Update current expression state
+              if (data.face_detected) {
+                setCurrentExpression({
+                  expression: data.expression || 'neutral',
+                  emoji: data.emoji || '😐',
+                  confidence: data.confidence || 0
+                })
+              } else {
+                setCurrentExpression(null)
+              }
             } else if ((data.type === 'joke_audio' || data.type === 'music_audio') && data.audio_data) {
               if (currentAudioRef.current) {
                 currentAudioRef.current.pause()
@@ -175,6 +245,9 @@ export default function Home() {
 
     return () => {
       // Cleanup
+      if (frameIntervalRef.current) {
+        clearInterval(frameIntervalRef.current)
+      }
       if (currentAudioRef.current) {
         currentAudioRef.current.pause()
         currentAudioRef.current = null
@@ -204,13 +277,33 @@ export default function Home() {
         className="w-full h-full object-cover"
       />
 
-      {/* Connection status */}
-      <div className="absolute top-4 right-4">
+      {/* Hidden canvas for frame capture */}
+      <canvas
+        ref={canvasRef}
+        className="hidden"
+        width={416}
+        height={416}
+      />
+
+      {/* Status indicators */}
+      <div className="absolute top-4 right-4 space-y-2">
+        {/* Connection status */}
         <div className={`px-3 py-1 rounded-full text-sm font-medium ${
           isConnected ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
         }`}>
           {isConnected ? 'Connected' : 'Disconnected'}
         </div>
+
+        {/* Expression indicator */}
+        {currentExpression && (
+          <div className="bg-purple-500 text-white px-3 py-1 rounded-full text-sm font-medium flex items-center space-x-2">
+            <span className="text-lg">{currentExpression.emoji}</span>
+            <span>{currentExpression.expression}</span>
+            <span className="text-xs opacity-75">
+              ({Math.round(currentExpression.confidence * 100)}%)
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Caption overlay */}

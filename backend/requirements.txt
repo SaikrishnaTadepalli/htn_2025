@@ -11,3 +11,4 @@ python-dotenv
 deepgram-sdk
 spotipy
 yt-dlp
+google-cloud-vision

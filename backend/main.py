@@ -8,6 +8,7 @@ from joke_responder import JokeResponder
 from joke_tts import JokeTTS
 from spotify_responder import SpotifyResponder
 from youtube_music_controller import YouTubeMusicController
+from facial_expression_analyzer import FacialExpressionAnalyzer
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -20,9 +21,17 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI()
 
-# Initialize audio processor, joke responder, and Spotify services
+# Initialize audio processor, joke responder, facial expression analyzer, and services
 audio_processor = AudioProcessor()
 joke_responder = JokeResponder()
+
+# Initialize facial expression analyzer (optional - gracefully handle initialization errors)
+expression_analyzer = None
+try:
+    expression_analyzer = FacialExpressionAnalyzer()
+    logger.info("Facial expression analyzer initialized successfully")
+except Exception as e:
+    logger.warning(f"Facial expression analyzer not available: {e}")
 
 # Initialize Music services (YouTube-based)
 music_responder = None
@@ -37,6 +46,9 @@ except Exception as e:
 # Global state for sleeper agent control
 streaming_enabled = True  # Start with streaming enabled
 audio_currently_streaming = {}  # Track per-session audio streaming state
+
+# Expression data cache for each session
+expression_cache = {}  # Store recent expression data per session
 
 async def check_sleeper_phrases(text: str) -> tuple[bool, str, str]:
     """
@@ -149,6 +161,72 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                         "session_id": session_id,
                         "status": "ready"
                     })
+
+                elif msg_type == "video_frame":
+                    session_id = data.get("session_id", "unknown")
+                    frame_data = data.get("frame_data")
+
+                    if frame_data and expression_analyzer:
+                        logger.debug(f"Processing video frame for {session_id}")
+
+                        try:
+                            # Analyze facial expression
+                            expression_result = expression_analyzer.analyze_frame(frame_data)
+
+                            if expression_result.get("success", False):
+                                logger.info(f"Expression detected for {session_id}: {expression_result['expression']} (confidence: {expression_result['confidence']:.2f})")
+
+                                # Cache expression data for joke generation
+                                expression_cache[session_id] = {
+                                    "expression": expression_result["expression"],
+                                    "confidence": expression_result["confidence"],
+                                    "description": expression_analyzer.get_expression_description(
+                                        expression_result["expression"],
+                                        expression_result["confidence"]
+                                    ),
+                                    "timestamp": data.get("timestamp"),
+                                    "success": True
+                                }
+
+                                # Send expression result back to client
+                                await websocket.send_json({
+                                    "type": "expression_result",
+                                    "session_id": session_id,
+                                    "expression": expression_result["expression"],
+                                    "confidence": expression_result["confidence"],
+                                    "emoji": expression_analyzer.get_expression_emoji(expression_result["expression"]),
+                                    "description": expression_analyzer.get_expression_description(
+                                        expression_result["expression"],
+                                        expression_result["confidence"]
+                                    ),
+                                    "face_detected": expression_result.get("face_detected", False),
+                                    "timestamp": data.get("timestamp")
+                                })
+                            else:
+                                # Send error/no face detected result
+                                await websocket.send_json({
+                                    "type": "expression_result",
+                                    "session_id": session_id,
+                                    "expression": expression_result.get("expression", "no_face"),
+                                    "confidence": 0.0,
+                                    "emoji": expression_analyzer.get_expression_emoji(expression_result.get("expression", "no_face")),
+                                    "error": expression_result.get("error", "No face detected"),
+                                    "face_detected": False,
+                                    "timestamp": data.get("timestamp")
+                                })
+
+                        except Exception as e:
+                            logger.error(f"Error processing video frame for {session_id}: {e}")
+                            await websocket.send_json({
+                                "type": "expression_result",
+                                "session_id": session_id,
+                                "expression": "error",
+                                "confidence": 0.0,
+                                "emoji": "❌",
+                                "error": str(e),
+                                "face_detected": False,
+                                "timestamp": data.get("timestamp")
+                            })
 
                 elif msg_type == "audio_chunk":
                     session_id = data.get("session_id", "unknown")
@@ -327,7 +405,9 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                             # Only process jokes if no music was requested and on final transcripts
                             joke_result = None
                             if not music_result and not transcription.startswith("[partial]"):
-                                joke_result = await joke_responder.process_text_for_joke(transcription)
+                                # Get recent expression data for context
+                                current_expression = expression_cache.get(session_id)
+                                joke_result = await joke_responder.process_text_for_joke(transcription, current_expression)
 
                             if joke_result:
                                 logger.info(f"Generated joke for {session_id}: {joke_result['joke_response']}")
@@ -396,9 +476,10 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                     session_id = data.get("session_id", "unknown")
                     logger.info(f"Audio session ended: {session_id}")
 
-                    # Reset audio buffer and streaming state
+                    # Reset audio buffer, streaming state, and expression cache
                     audio_processor.reset_buffer()
                     audio_currently_streaming.pop(session_id, None)
+                    expression_cache.pop(session_id, None)
 
                     await websocket.send_json({
                         "type": "session_ended",

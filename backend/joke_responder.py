@@ -49,19 +49,22 @@ class JokeResponder:
             prompt = f"""
             Analyze the following text and determine if it would be appropriate to respond with a joke or funny quip.
             
+            IMPORTANT: If the text addresses "Polly" (the AI assistant), you should ALWAYS respond with a joke, answer the question or funny quip, regardless of other factors.
+            
             Consider:
             1. Is the text asking a question or making a statement that could benefit from humor?
             2. Is the context appropriate for a lighthearted response?
             3. Would a joke add value to the conversation?
             4. Is the text too serious or sensitive for humor?
+            5. Does the text address "Polly" directly? (If yes, always respond!)
             
             Text: "{text}"
             
             Respond with a JSON object containing:
-            - "should_respond": boolean (true if worth responding with a joke)
-            - "confidence": float (0.0 to 1.0, how confident you are)
+            - "should_respond": boolean (true if worth responding with a joke OR if text addresses Polly)
+            - "confidence": float (0.0 to 1.0, how confident you are - use 0.9+ if addressing Polly)
             - "reasoning": string (brief explanation of your decision)
-            - "joke_type": string (suggested type of joke: "pun", "observational", "wordplay", "situational", or "none")
+            - "joke_type": string (suggested type of joke: "pun", "observational", "wordplay", "situational", "polly_response", or "none")
             """
             
             response = self.client.chat.completions.create(
@@ -124,30 +127,44 @@ class JokeResponder:
                 "joke_type": "none"
             }
     
-    async def generate_joke_response(self, text: str, joke_type: str = "general") -> Optional[str]:
+    async def generate_joke_response(self, text: str, joke_type: str = "general", expression_context: Optional[str] = None) -> Optional[str]:
         """
-        Generate a joke or funny quip based on the input text.
-        
+        Generate a joke or funny quip based on the input text and optional expression context.
+
         Args:
             text: The input text to respond to
             joke_type: Type of joke to generate
-            
+            expression_context: Optional facial expression context to incorporate
+
         Returns:
             Generated joke response or None if generation fails
         """
         try:
+            # Build context-aware prompt
+            context_info = ""
+            if expression_context:
+                context_info = f"\n            Visual context: {expression_context}"
+
+            # Special handling for Polly responses
+            polly_context = ""
+            if joke_type == "polly_response" or "polly" in text.lower():
+                polly_context = "\n            - This is addressing Polly (the AI assistant), so be extra engaging and personable"
+                polly_context += "\n            - You can reference being an AI or having AI capabilities in a humorous way"
+                polly_context += "\n            - Make Polly seem friendly, witty, and helpful"
+
             prompt = f"""
-            Generate a funny, appropriate joke or quip in response to the following text.
-            
+            Generate a funny, appropriate joke or quip in response to the following text.{context_info}
+
             Guidelines:
             - Keep it lighthearted and appropriate
-            - Make it relevant to the input text
+            - Make it relevant to the input text{"and visual context" if expression_context else ""}
             - Keep it under {self.max_response_length} characters
             - Be clever but not offensive
             - Use the joke type: {joke_type}
-            
+            {"- Reference their facial expression naturally if provided" if expression_context else ""}{polly_context}
+
             Input text: "{text}"
-            
+
             Generate a funny response:
             """
             
@@ -172,13 +189,14 @@ class JokeResponder:
             logger.error(f"Error generating joke response: {e}")
             return None
     
-    async def process_text_for_joke(self, text: str) -> Optional[Dict[str, Any]]:
+    async def process_text_for_joke(self, text: str, expression_data: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Main method to process text and determine if a joke response should be generated.
-        
+
         Args:
             text: The input text to process
-            
+            expression_data: Optional facial expression data to incorporate
+
         Returns:
             Dict with joke response data or None if no joke should be generated
         """
@@ -193,19 +211,40 @@ class JokeResponder:
             return None
         
         confidence = analysis.get("confidence", 0.0)
-        if confidence < self.joke_threshold:
-            logger.info(f"Confidence too low ({confidence}) for joke response to: '{text}'")
+        
+        # Check if this is a Polly-specific response (lower threshold)
+        is_polly_addressed = "polly" in text.lower() or analysis.get("joke_type") == "polly_response"
+        
+        if is_polly_addressed:
+            logger.info(f"Polly addressed in text: '{text}' - responding with lower threshold")
+            # Use lower threshold for Polly responses
+            effective_threshold = 0.5
+        else:
+            effective_threshold = self.joke_threshold
+        
+        if confidence < effective_threshold:
+            logger.info(f"Confidence too low ({confidence}) for joke response to: '{text}' (threshold: {effective_threshold})")
             return None
         
+        # Build expression context for joke generation
+        expression_context = None
+        if expression_data and expression_data.get("success", False):
+            expression = expression_data.get("expression", "neutral")
+            confidence = expression_data.get("confidence", 0.0)
+            description = expression_data.get("description", "")
+
+            if confidence > 0.4:  # Only use expression if confidence is reasonable
+                expression_context = f"The person appears to be {description}"
+
         # Generate the joke response
         joke_type = analysis.get("joke_type", "general")
-        joke_response = await self.generate_joke_response(text, joke_type)
+        joke_response = await self.generate_joke_response(text, joke_type, expression_context)
         
         if not joke_response:
             logger.warning(f"Failed to generate joke response for: '{text}'")
             return None
         
-        return {
+        result = {
             "original_text": text,
             "joke_response": joke_response,
             "joke_type": joke_type,
@@ -213,6 +252,16 @@ class JokeResponder:
             "reasoning": analysis.get("reasoning", ""),
             "timestamp": asyncio.get_event_loop().time()
         }
+
+        # Add expression information if available
+        if expression_data and expression_data.get("success", False):
+            result["expression_data"] = {
+                "expression": expression_data.get("expression"),
+                "expression_confidence": expression_data.get("confidence"),
+                "expression_context": expression_context
+            }
+
+        return result
     
     async def handle_websocket_message(self, message_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -261,7 +310,11 @@ async def test_joke_responder():
             "Why did the chicken cross the road?",
             "Can you help me with this math problem?",
             "I love pizza!",
-            "My computer is broken again."
+            "My computer is broken again.",
+            "Hey Polly, how are you doing?",
+            "Polly, can you tell me a joke?",
+            "Polly, what's your favorite color?",
+            "Hi Polly, I need some help!"
         ]
         
         for text in test_texts:
